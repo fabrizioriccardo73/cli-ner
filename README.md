@@ -29,23 +29,60 @@
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation & Setup
 
 ### Requirements
 - macOS (Apple Silicon or Intel)
 - Rust & Cargo (1.80+)
 
-### Building from source
+### Option 1: Install globally via Cargo (Recommended)
+From within the project root directory:
 ```bash
-git clone https://github.com/fabrizio-riccardo/cli-ner.git
-cd cli-ner
+cargo install --path .
+```
+This automatically compiles the optimized release binary and installs it to `~/.cargo/bin/cli-ner` (accessible globally if `~/.cargo/bin` is in your `PATH`).
+
+### Option 2: Build release binary & copy to PATH
+```bash
 cargo build --release
+
+# Copy to system-wide binaries:
+sudo cp target/release/cli-ner /usr/local/bin/
+
+# Or copy to user-local binaries:
+mkdir -p ~/.local/bin && cp target/release/cli-ner ~/.local/bin/
 ```
 
-The compiled binary will be located in `target/release/cli-ner`. You can install it to your PATH:
+### Option 3: Shell Alias
+Add the following line to your `~/.zshrc` or `~/.bashrc`:
 ```bash
-cp target/release/cli-ner /usr/local/bin/
+alias cli-ner="/path/to/cli-ner/target/release/cli-ner"
 ```
+
+---
+
+## 🧭 Recommended Workflow
+
+1. **System Health & Diagnostics**:
+   ```bash
+   cli-ner doctor
+   ```
+2. **Interactive Docker Inspection & Safe Cleanup**:
+   ```bash
+   cli-ner docker
+   ```
+3. **Simulate Cache & Developer Cleanup (Dry-Run)**:
+   ```bash
+   cli-ner clean
+   ```
+4. **Execute Safe Cleanup (Moves files to macOS Trash)**:
+   ```bash
+   cli-ner clean --execute
+   ```
+5. **Explore History & Metrics (TUI Dashboard)**:
+   ```bash
+   cli-ner dashboard
+   ```
 
 ---
 
