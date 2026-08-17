@@ -189,11 +189,46 @@ impl App {
             }
         }
 
+        let running_browsers = crate::safety::browser::get_running_browsers();
+        let targets_user_cache = category_filter.is_none() || category_filter == Some(CleanCategory::UserCache);
+
+        if !running_browsers.is_empty() && targets_user_cache {
+            let browser_names = running_browsers
+                .iter()
+                .map(|b| b.name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}",
+                "🌐 ACTIVE BROWSER SAFETY PROTECTION:".bold().yellow()
+            );
+            println!(
+                "   {} {}",
+                "Running browser(s) detected:".yellow(),
+                browser_names.bold().white()
+            );
+            println!(
+                "{}",
+                "   To prevent broken web pages, crashed tabs, and extension state issues,".yellow()
+            );
+            println!(
+                "{}",
+                "   active browser cache folders are AUTOMATICALLY EXCLUDED from cleanup.".yellow()
+            );
+
+            println!(
+                "{}\n",
+                "   💡 Tip: Close your browser(s) and re-run cli-ner if you want to clean their cache safely.".cyan()
+            );
+        }
+
         println!("\n📋 Cleaning Targets Summary:\n{}", preview_table);
         println!(
             "\n📊 Total Potential Space to Reclaim: {}\n",
             format_bytes(total_reclaimable).bold().green()
         );
+
+
 
         let has_docker = scanned.iter().any(|(c, _)| c.category() == CleanCategory::Docker);
 
@@ -517,10 +552,23 @@ impl App {
         }
         println!("{}\n", tool_table);
 
-        // 3. Security & Safety Reminder
+        // 3. Browser Status
+        let running_browsers = crate::safety::browser::get_running_browsers();
+        println!("{}", "🌐 Active Web Browsers Status:".bold());
+        if running_browsers.is_empty() {
+            println!(" • No active web browsers detected (all browser caches can be safely cleaned).");
+        } else {
+            let names = running_browsers.iter().map(|b| b.name).collect::<Vec<_>>().join(", ");
+            println!(" • Active browsers detected: {}", names.yellow().bold());
+            println!("   ↳ Caches for these browsers will be automatically protected & excluded during cleanup.");
+        }
+        println!();
+
+        // 4. Security & Safety Reminder
         println!("{}", "🛡️ Safety Guarantees & Protection:".bold());
         println!(" • System Integrity Protection (SIP) respected: protected system paths are never touched.");
         println!(" • Blocklist active: personal files (Documents, Desktop, SSH keys, Mail, Keychain) are blocked.");
+        println!(" • Browser Protection active: running browser caches are excluded to prevent tab/extension corruption.");
         println!(" • Reversible by default: Cleaned items are moved to macOS Trash (~/.Trash).");
         println!(" • Audit trail: All executions are logged to ~/.cli-ner/logs/\n");
 
