@@ -136,7 +136,7 @@ impl App {
         };
 
         // Scan selected targets
-        let scanned = self.registry.scan_all(category_filter);
+        let mut scanned = self.registry.scan_all(category_filter);
         let mut total_reclaimable = 0u64;
         let mut total_items = 0usize;
 
@@ -191,9 +191,41 @@ impl App {
             format_bytes(total_reclaimable).bold().green()
         );
 
-        // Explicit Docker Warning if Docker is in targets
         let has_docker = scanned.iter().any(|(c, _)| c.category() == CleanCategory::Docker);
-        if has_docker {
+
+        // Interactive Docker confirmation when executing
+        if args.execute && !args.yes && has_docker {
+            println!("{}", "🐳 DOCKER CLEANUP DETAILS & SAFETY WARNING:".bold().yellow());
+            println!("{}", "   • Docker BuildKit build cache will be purged.".yellow());
+            println!("{}", "   • Dangling / untagged images will be removed.".yellow());
+            println!("{}", "   • Stopped containers will be pruned.".yellow());
+            println!("{}", "   ⚠️  CRITICAL: Any data stored in container filesystems NOT mounted".yellow().bold());
+            println!("{}", "      in persistent Docker volumes will be PERMANENTLY LOST!\n".yellow().bold());
+
+            let include_docker = Confirm::new()
+                .with_prompt("Do you want to include Docker prune in the cleanup? (Select 'No' to continue without Docker)")
+                .default(false)
+                .interact()
+                .unwrap_or(false);
+
+            if !include_docker {
+                println!("{}", "ℹ️  Docker cleanup skipped. Continuing cleanup WITHOUT Docker.\n".cyan());
+                scanned.retain(|(c, _)| c.category() != CleanCategory::Docker);
+
+                // Recalculate totals after excluding Docker
+                total_reclaimable = 0;
+                total_items = 0;
+                for (_, scan_res) in &scanned {
+                    if let Ok(items) = scan_res {
+                        total_reclaimable += items.iter().map(|i| i.size_bytes).sum::<u64>();
+                        total_items += items.len();
+                    }
+                }
+            } else {
+                println!("{}", "✅ Docker cleanup included in target list.\n".green());
+            }
+        } else if is_dry_run && has_docker {
+            // Explicit Docker Warning info in dry-run mode
             println!("{}", "⚠️  DOCKER CONTAINER DATA WARNING:".bold().yellow());
             println!("{}", "   Docker cleanup will remove stopped containers and build cache.".yellow());
             println!("{}", "   Any uncommitted data inside container filesystems NOT stored in".yellow());
