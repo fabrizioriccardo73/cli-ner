@@ -1,6 +1,10 @@
 use crate::cleaner::registry::CleanerRegistry;
 use crate::cleaner::traits::CleanResult;
-use crate::cli::{CleanArgs, DashboardArgs, DoctorArgs, OutputFormat, ReportArgs, ScanArgs};
+use crate::cli::{
+    CleanArgs, DashboardArgs, DoctorArgs, DockerArgs, DockerSubcommand, OutputFormat, ReportArgs,
+    ScanArgs,
+};
+use crate::docker::{DockerClient, DockerInteractive};
 use crate::report::operation_log::{
     read_recent_operations, save_operation_log, ActionStatus, ActionType, OperationRecord,
 };
@@ -519,6 +523,74 @@ impl App {
         println!(" • Blocklist active: personal files (Documents, Desktop, SSH keys, Mail, Keychain) are blocked.");
         println!(" • Reversible by default: Cleaned items are moved to macOS Trash (~/.Trash).");
         println!(" • Audit trail: All executions are logged to ~/.cli-ner/logs/\n");
+
+        Ok(())
+    }
+
+    /// Handle `docker` management and cleanup command
+    pub fn handle_docker(&self, args: DockerArgs) -> Result<()> {
+        if !DockerClient::is_available() {
+            println!(
+                "{}",
+                "❌ Docker is not available or the daemon is not running."
+                    .bold()
+                    .red()
+            );
+            println!(
+                "{}",
+                "Please verify Docker Desktop is running and that `docker` is in your PATH."
+                    .yellow()
+            );
+            return Ok(());
+        }
+
+        match args.action {
+            None => {
+                // Default: interactive menu
+                DockerInteractive::run_interactive_menu()?;
+            }
+            Some(DockerSubcommand::Wizard) => {
+                DockerInteractive::run_guided_cleanup_wizard(args.dry_run)?;
+            }
+            Some(DockerSubcommand::Containers(c_args)) => {
+                if c_args.list {
+                    let containers = DockerClient::list_containers()?;
+                    println!("\n📦 Docker Containers:\n{}", DockerInteractive::render_containers_table(&containers));
+                } else {
+                    DockerInteractive::manage_containers_interactive(args.dry_run)?;
+                }
+            }
+            Some(DockerSubcommand::Images(i_args)) => {
+                if i_args.list {
+                    let images = DockerClient::list_images()?;
+                    println!("\n🖼️  Docker Images:\n{}", DockerInteractive::render_images_table(&images));
+                } else if i_args.dangling {
+                    if args.dry_run {
+                        println!("{}", "ℹ️ [DRY-RUN] Would run `docker image prune -f`".yellow());
+                    } else {
+                        println!("{}", "🧹 Pruning dangling images...".cyan());
+                        match DockerClient::prune_dangling_images() {
+                            Ok(msg) => println!("{} {}", "✅ Success:".green(), msg),
+                            Err(e) => println!("{} {}", "❌ Error:".red(), e),
+                        }
+                    }
+                } else {
+                    DockerInteractive::manage_images_interactive(args.dry_run)?;
+                }
+            }
+            Some(DockerSubcommand::BuildCache) => {
+                DockerInteractive::clean_build_cache_interactive(args.dry_run)?;
+            }
+            Some(DockerSubcommand::Volumes) => {
+                DockerInteractive::audit_volumes_interactive()?;
+            }
+            Some(DockerSubcommand::Status) => {
+                let df = DockerClient::get_system_df()?;
+                println!("\n{}", DockerInteractive::render_df_table(&df));
+                let containers = DockerClient::list_containers()?;
+                println!("\n📦 Active & Stopped Containers:\n{}", DockerInteractive::render_containers_table(&containers));
+            }
+        }
 
         Ok(())
     }

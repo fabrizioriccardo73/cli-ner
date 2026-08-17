@@ -68,3 +68,63 @@ fn test_cli_scan_json() {
     assert!(stdout.contains("\"target_path\""));
     assert!(stdout.contains("\"entries\""));
 }
+
+#[test]
+fn test_cli_docker_help() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "docker", "--help"])
+        .output()
+        .expect("Failed to execute cargo run -- docker --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Safe interactive Docker manager"));
+    assert!(stdout.contains("containers"));
+    assert!(stdout.contains("images"));
+    assert!(stdout.contains("volumes"));
+}
+
+#[test]
+fn test_cli_docker_status() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "docker", "status"])
+        .output()
+        .expect("Failed to execute cargo run -- docker status");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Docker Component") || stdout.contains("Docker is not available"));
+}
+
+#[test]
+fn test_cli_docker_containers_list() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "docker", "containers", "--list"])
+        .output()
+        .expect("Failed to execute cargo run -- docker containers --list");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_cli_docker_images_list() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "docker", "images", "--list"])
+        .output()
+        .expect("Failed to execute cargo run -- docker images --list");
+
+    assert!(output.status.success());
+}
+
+#[test]
+fn test_cli_docker_volumes() {
+    let output = Command::new("cargo")
+        .args(["run", "--", "docker", "volumes"])
+        .output()
+        .expect("Failed to execute cargo run -- docker volumes");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("DOCKER VOLUMES & PERSISTENT DATA SAFETY AUDIT") || stdout.contains("Docker is not available"));
+}
+

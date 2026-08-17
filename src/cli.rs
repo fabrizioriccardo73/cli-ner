@@ -33,6 +33,9 @@ pub enum Commands {
 
     /// 🩺 Run system diagnostics, permissions check, and tool availability
     Doctor(DoctorArgs),
+
+    /// 🐳 Safe interactive Docker manager & cleanup wizard
+    Docker(DockerArgs),
 }
 
 #[derive(Args, Debug)]
@@ -118,5 +121,54 @@ pub struct DoctorArgs {
 pub enum OutputFormat {
     Table,
     Json,
+}
+
+#[derive(Args, Debug)]
+pub struct DockerArgs {
+    #[command(subcommand)]
+    pub action: Option<DockerSubcommand>,
+
+    /// Dry run mode (simulate actions without executing deletion)
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DockerSubcommand {
+    /// 🧙 Launch guided interactive cleanup wizard
+    Wizard,
+
+    /// 📦 Inspect and selectively clean stopped containers
+    Containers(DockerContainersArgs),
+
+    /// 🖼️ Inspect and clean dangling or unused images
+    Images(DockerImagesArgs),
+
+    /// 🔨 Purge BuildKit build cache
+    BuildCache,
+
+    /// 💾 Safety audit of persistent Docker volumes
+    Volumes,
+
+    /// 📊 Overview of Docker storage usage (docker system df)
+    Status,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct DockerContainersArgs {
+    /// Only list containers without prompting for deletion
+    #[arg(short, long)]
+    pub list: bool,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct DockerImagesArgs {
+    /// Only list images without prompting for deletion
+    #[arg(short, long)]
+    pub list: bool,
+
+    /// Automatically prune dangling (<none>:<none>) images
+    #[arg(short, long)]
+    pub dangling: bool,
 }
 

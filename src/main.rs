@@ -1,6 +1,7 @@
 mod app;
 mod cleaner;
 mod cli;
+mod docker;
 mod report;
 mod safety;
 mod scanner;
@@ -32,6 +33,7 @@ fn main() -> Result<()> {
         Commands::Report(args) => app.handle_report(args)?,
         Commands::Dashboard(args) => app.handle_dashboard(args)?,
         Commands::Doctor(args) => app.handle_doctor(args)?,
+        Commands::Docker(args) => app.handle_docker(args)?,
     }
 
     Ok(())

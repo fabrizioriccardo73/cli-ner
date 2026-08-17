@@ -113,7 +113,39 @@ cli-ner report --last
 cli-ner report --format json
 ```
 
-### 5. `cli-ner doctor` — System Diagnostics & Environment Check
+### 5. `cli-ner docker` — Safe Interactive Docker Manager & Cleanup
+```bash
+# Launch the interactive Docker management & cleanup wizard
+cli-ner docker
+
+# Run guided step-by-step cleanup wizard in dry-run mode
+cli-ner docker wizard --dry-run
+
+# Inspect and manage stopped containers (active containers are protected!)
+cli-ner docker containers
+cli-ner docker containers --list
+
+# Inspect and manage images (in-use images are locked and protected)
+cli-ner docker images
+cli-ner docker images --list
+cli-ner docker images --dangling
+
+# Purge BuildKit build cache
+cli-ner docker build-cache
+
+# Run safety audit on persistent volumes (database & application data)
+cli-ner docker volumes
+
+# Storage breakdown summary (docker system df)
+cli-ner docker status
+```
+
+**Docker Safety Guarantees**:
+- 🟢 **Running Containers**: Locked and protected against accidental removal.
+- 🔒 **In-Use Images**: Cross-referenced with active containers and protected from deletion.
+- ⚠️ **Volumes & Persistent Data**: Volumes are **NEVER** deleted in standard cleanups. Container mounts (databases, bind-mounts) are clearly displayed before any stopped container removal.
+
+### 6. `cli-ner doctor` — System Diagnostics & Environment Check
 
 ```bash
 cli-ner doctor
