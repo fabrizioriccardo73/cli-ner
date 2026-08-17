@@ -1,155 +1,158 @@
 # 🧹 CLI-NER
 
-> **CLI avanzata, sicura e documentata per la gestione e liberazione dello spazio su disco in macOS.**
+> **Advanced, safe, and documented CLI for macOS disk space management and cleanup.**
 
 ---
 
-## 🌟 Caratteristiche Principali
+## 🌟 Key Features
 
-- 🛡️ **Safety-First & Reversibile di Default**:
-  - Sposta i file nel **Cestino di macOS** (`~/.Trash`) invece di cancellarli definitivamente.
-  - Modalità **Dry-Run attiva di default**: vedi sempre esattamente cosa verrebbe toccato e quanto spazio recupereresti prima di qualsiasi azione.
-  - **Blocklist rigorosa**: directory critiche di sistema (`/System`, `/usr`, `/bin`, etc.) e dati utente personali (`~/Documents`, `~/Desktop`, `~/.ssh`, `~/Library/Mail`, `~/Library/Keychains`, etc.) non vengono **MAI** toccati.
-  - **Allowlist controllata**: pulisce solo contenuti sicuri autorizzati (`~/Library/Caches/*`, `~/Library/Logs/*`, `/tmp/*`, cache sviluppatore), senza mai eliminare le cartelle radice.
-- ⚡ **Performance Elevate**:
-  - Scritto in **Rust**, veloce ed efficiente nella scansione ricorsiva del filesystem e nel calcolo delle dimensioni.
-- 🛠️ **Supporto Cache Sviluppatore**:
+- 🛡️ **Safety-First & Reversible by Default**:
+  - Moves files to **macOS Trash** (`~/.Trash`) instead of permanently deleting them.
+  - **Dry-Run Mode enabled by default**: see exactly what would be cleaned and how much space would be reclaimed before performing any action.
+  - **Strict Blocklist**: Critical system directories (`/System`, `/usr`, `/bin`, etc.) and personal user data (`~/Documents`, `~/Desktop`, `~/.ssh`, `~/Library/Mail`, `~/Library/Keychains`, etc.) are **NEVER** touched.
+  - **Controlled Allowlist**: Cleans only explicitly authorized safe targets (`~/Library/Caches/*`, `~/Library/Logs/*`, `/tmp/*`, developer caches) without ever deleting root folders.
+- ⚡ **High Performance**:
+  - Written in **Rust**, fast and resource-efficient for recursive filesystem scanning and size calculations.
+- 🛠️ **Developer Tools & Caches Support**:
   - **Homebrew**: `brew cleanup -s`, `brew autoremove`
   - **Node.js**: `npm` cache (`~/.npm/_cacache`)
   - **Python**: `pip` cache (`~/Library/Caches/pip`)
-  - **Docker**: `docker system prune`
-  - **Xcode**: DerivedData, Archives, iOS DeviceSupport (con verifica che Xcode non sia in esecuzione)
-- 📝 **Audit Trail & Logging Immutabile**:
-  - Ogni operazione di scansione ed esecuzione viene registrata in `~/.cli-ner/logs/` in formato JSON Lines con timestamp, byte liberati, lista dei file ed eventuali errori.
-- 🔍 **Analizzatore Disco & Ricerca File Grandi**:
-  - Mappatura dello spazio occupato per directory con percentuale di utilizzo.
-  - Ricerca ricorsiva di file di grandi dimensioni con soglia personalizzabile (es. `--min-size 500MB`).
+  - **Docker**: Accurate space detection via `docker system df`, container data loss warnings, build cache, dangling images, and stopped containers.
+  - **Xcode**: DerivedData, Archives, iOS DeviceSupport (with process checks to ensure Xcode is not running).
+- 📝 **Immutable Audit Trail & Logging**:
+  - Every scan and clean operation is logged to `~/.cli-ner/logs/` in JSON Lines format with timestamps, freed bytes, processed item lists, and errors.
+- 🖥️ **Interactive Terminal UI (TUI) Dashboard**:
+  - Full graphical terminal dashboard powered by `ratatui` to explore logs, inspect item-by-item operations, and view reclaimed space breakdown charts.
+- 🔍 **Disk Analyzer & Large Files Finder**:
+  - Directory space usage mapping with percentage breakdown.
+  - Recursive search for large files exceeding a customizable threshold (e.g., `--min-size 500MB`).
 
 ---
 
-## 🚀 Installazione
+## 🚀 Installation
 
-### Requisiti
-- macOS (Apple Silicon o Intel)
+### Requirements
+- macOS (Apple Silicon or Intel)
 - Rust & Cargo (1.80+)
 
-### Compilazione dal sorgente
+### Building from source
 ```bash
 git clone https://github.com/fabrizio-riccardo/cli-ner.git
 cd cli-ner
 cargo build --release
 ```
 
-Il binario compilato si troverà in `target/release/cli-ner`. Puoi copiarlo in `/usr/local/bin` o `~/.local/bin`:
+The compiled binary will be located in `target/release/cli-ner`. You can install it to your PATH:
 ```bash
 cp target/release/cli-ner /usr/local/bin/
 ```
 
 ---
 
-## 📖 Utilizzo e Comandi
+## 📖 Usage & Commands
 
-### 1. `cli-ner scan` — Analisi Spazio Disco
+### 1. `cli-ner scan` — Disk Space Analysis
 ```bash
-# Analizza la directory corrente o la home directory
+# Analyze current directory or user home directory
 cli-ner scan
 
-# Analizza un percorso specifico
+# Analyze a specific path
 cli-ner scan --path ~/Downloads
 
-# Mostra i top 20 elementi per dimensione
+# Display top 20 items by size
 cli-ner scan --top 20
 
-# Ricerca file di grandi dimensioni (>= 500MB)
+# Search for large files (>= 500MB)
 cli-ner scan --large-files --min-size 500MB
 
-# Output strutturato in formato JSON
+# Structured JSON output
 cli-ner scan --format json
 ```
 
-### 2. `cli-ner clean` — Pulizia Sicura Cache e File Temporanei
+### 2. `cli-ner clean` — Safe Cache & Temp Cleanup
 ```bash
-# Dry-run (DEFAULT): Mostra cosa verrebbe pulito SENZA toccare alcun file
+# Dry-run (DEFAULT): Preview what will be cleaned WITHOUT modifying any files
 cli-ner clean
 
-# Esegui la pulizia effettiva (sposta i file nel Cestino macOS)
+# Execute actual cleanup (moves files to macOS Trash)
 cli-ner clean --execute
 
-# Pulisce solo una categoria specifica
+# Target a specific category
 cli-ner clean --category user-cache --execute
 cli-ner clean --category xcode --execute
+cli-ner clean --category docker --execute
 cli-ner clean --category dev --execute
 
-# Cancellazione permanente (richiede flag esplicito e conferma interattiva)
+# Permanent deletion (requires explicit flag and confirmation)
 cli-ner clean --execute --force
 ```
 
-### 3. `cli-ner dashboard` (oppure `cli-ner report --tui`) — Dashboard Grafica TUI Interattiva
+### 3. `cli-ner dashboard` (or `cli-ner report --tui`) — Interactive TUI Dashboard
 ```bash
-# Avvia la Dashboard interattiva a terminale per navigare i log e le statistiche
+# Launch interactive terminal UI dashboard to explore audit logs & statistics
 cli-ner dashboard
 
-# Oppure tramite il flag del report
+# Or launch via report flag
 cli-ner report --tui
 ```
-**Controlli Dashboard**:
-- `[1] / [2] / [3]` o `[Tab]`: Passa tra Cronologia Operazioni, Dettaglio Singola Operazione e Statistiche per Categoria.
-- `[↑] / [↓]` o `[j] / [k]`: Scorri l'elenco delle operazioni o dei singoli file eliminati.
-- `[Enter]` o `[d]`: Ispeziona i dettagli della voce selezionata.
-- `[q]` o `[Esc]`: Esci dalla dashboard.
+**Dashboard Keybindings**:
+- `[1] / [2] / [3]` or `[Tab]`: Switch between Operations History, Operation Details, and Category Statistics.
+- `[↑] / [↓]` or `[j] / [k]`: Navigate operations or individual cleaned files.
+- `[Enter]` or `[d]`: Inspect details for the selected entry.
+- `[q]` or `[Esc]`: Quit dashboard.
 
-### 4. `cli-ner report` — Storico e Audit Operazioni
+### 4. `cli-ner report` — Audit Logs & History
 ```bash
-# Mostra la tabella delle ultime 10 operazioni
+# Display summary table of the last 10 operations
 cli-ner report
 
-# Mostra il dettaglio dettagliato dell'ultima operazione
+# Show detailed breakdown for the last operation
 cli-ner report --last
 
-# Esporta in formato JSON
+# Export to JSON format
 cli-ner report --format json
 ```
 
-### 5. `cli-ner doctor` — Diagnostica e Verifica Ambiente
+### 5. `cli-ner doctor` — System Diagnostics & Environment Check
 
 ```bash
 cli-ner doctor
 ```
-Verifica:
-- Spazio libero e totale su tutti i dischi montati
-- Disponibilità dei tool esterni (Homebrew, npm, pip, Docker, Xcode)
-- Stato delle protezioni di sicurezza e permessi
+Checks:
+- Available and total space across all mounted disks.
+- Availability of external tools (Homebrew, npm, pip, Docker, Xcode).
+- Status of security protections, permissions, and paths.
 
 ---
 
-## 🛡️ Modello di Sicurezza Dettagliato
+## 🛡️ Detailed Safety Model
 
-### Validazione in 5 Passaggi
+### 5-Step Validation Pipeline
 
-Ogni file o directory candidato alla pulizia attraversa il seguente processo prima di qualsiasi modifica:
+Every file or directory candidate for cleanup passes through the following validation checks before any action is taken:
 
-1. **Verifica Blocklist**: Se il percorso fa parte di cartelle di sistema (`/System`, `/usr`, etc.) o dati personali (`~/.ssh`, `~/Documents`, `~/Desktop`, `~/Library/Mail`), l'operazione viene **immediatamente bloccata**.
-2. **Verifica Allowlist**: Il percorso deve rientrare esplicitamente in una categoria autorizzata.
-3. **Protezione Root Folder**: Non è consentito cancellare la cartella principale (es. `~/Library/Caches`), ma unicamente i singoli elementi al suo interno.
-4. **Symlink Guard**: I symlink non vengono seguiti ciecamente per evitare cancellazioni al di fuori delle cartelle consentite.
-5. **Process Safety Check**: Per operazioni sensibili (es. Xcode DerivedData), viene verificato che l'applicazione non sia attualmente in esecuzione.
+1. **Blocklist Check**: If the target belongs to critical system paths (`/System`, `/usr`, etc.) or personal user data (`~/.ssh`, `~/Documents`, `~/Desktop`, `~/Library/Mail`), the operation is **immediately rejected**.
+2. **Allowlist Verification**: The path must strictly belong to an authorized cleanable category.
+3. **Root Folder Protection**: Deleting root folders (e.g., `~/Library/Caches`) is prohibited; only their individual child items can be cleaned.
+4. **Symlink Guard**: Symlinks are never blindly followed to prevent unintended deletions outside target directories.
+5. **Process Safety Check**: Sensitive operations (e.g., Xcode DerivedData) verify that the corresponding application is not currently active.
 
 ---
 
-## 🧪 Esecuzione dei Test
+## 🧪 Running Tests
 
-Il progetto include una suite completa di unit test e test di integrazione end-to-end:
+The project includes a comprehensive unit and end-to-end integration test suite:
 
 ```bash
-# Esegui tutti i test
+# Run all tests
 cargo test
 
-# Esegui con output dettagliato
+# Run tests with detailed output
 cargo test -- --nocapture
 ```
 
 ---
 
-## 📄 Licenza
+## 📄 License
 
-Distribuito sotto licenza MIT.
+Distributed under the MIT License.
