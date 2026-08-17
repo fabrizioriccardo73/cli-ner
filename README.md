@@ -2,6 +2,9 @@
 
 > **Advanced, safe, and documented CLI for macOS disk space management and cleanup.**
 
+[![CsXaLjs.md.jpg](https://iili.io/CsXaLjs.md.jpg)](https://freeimage.host/i/CsXaLjs)
+
+
 ---
 
 ## 🌟 Key Features
