@@ -77,3 +77,77 @@ pub fn contract_tilde<P: AsRef<Path>>(path: P) -> String {
     }
     path.display().to_string()
 }
+
+/// Silently moves a file or directory into macOS Trash (~/.Trash) via POSIX rename without invoking GUI sound effects.
+pub fn move_to_trash_silent<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
+    let path = path.as_ref();
+    let trash_dir = expand_tilde("~/.Trash");
+    if !trash_dir.exists() {
+        fs::create_dir_all(&trash_dir).context("Failed to create ~/.Trash directory")?;
+    }
+
+    let file_name = path
+        .file_name()
+        .context("Invalid target path file name")?
+        .to_string_lossy();
+
+    let mut dest_path = trash_dir.join(file_name.as_ref());
+
+    // If destination already exists in Trash, add a timestamp suffix to prevent collisions
+    if dest_path.exists() {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f");
+        let unique_name = format!("{}_{}", file_name, timestamp);
+        dest_path = trash_dir.join(unique_name);
+    }
+
+    // Direct POSIX rename (atomic and 100% silent on the same volume)
+    match fs::rename(path, &dest_path) {
+        Ok(_) => Ok(dest_path),
+        Err(rename_err) => {
+            // Fallback for cross-device filesystems: copy + remove
+            if path.is_dir() {
+                trash::delete(path).with_context(|| {
+                    format!(
+                        "Failed to rename to trash ({}) and fallback failed",
+                        rename_err
+                    )
+                })?;
+                Ok(dest_path)
+            } else {
+                fs::copy(path, &dest_path)
+                    .and_then(|_| fs::remove_file(path))
+                    .with_context(|| {
+                        format!("Failed to move file to trash: {}", rename_err)
+                    })?;
+                Ok(dest_path)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+
+    #[test]
+    fn test_move_to_trash_silent() {
+        let temp_dir = expand_tilde("~/.cli-ner/test_scratch");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("test_silent_trash.txt");
+        {
+            let mut f = File::create(&test_file).unwrap();
+            writeln!(f, "test content").unwrap();
+        }
+        assert!(test_file.exists());
+
+        let moved_path = move_to_trash_silent(&test_file).expect("Silent trash should succeed");
+        assert!(!test_file.exists());
+        assert!(moved_path.exists());
+
+        // Cleanup test file from trash
+        let _ = fs::remove_file(&moved_path);
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+}

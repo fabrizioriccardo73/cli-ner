@@ -1,6 +1,7 @@
 use crate::report::operation_log::{ActionStatus, ActionType};
 use crate::safety::allowlist::CleanCategory;
 use crate::safety::validator::validate_path_for_cleaning;
+use crate::utils::fs::move_to_trash_silent;
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;
@@ -114,8 +115,8 @@ pub trait Cleaner: Send + Sync {
                     }
                 }
             } else {
-                // Default: move to macOS Trash
-                match trash::delete(&validation.canonical_path) {
+                // Default: silently move to macOS Trash
+                match move_to_trash_silent(&validation.canonical_path) {
                     Ok(_) => {
                         result.total_bytes_freed += item.size_bytes;
                         result.items_cleaned += 1;
