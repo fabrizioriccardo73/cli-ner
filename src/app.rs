@@ -1,7 +1,7 @@
 use crate::cleaner::registry::CleanerRegistry;
 use crate::cleaner::traits::CleanResult;
 use crate::cli::{
-    CleanArgs, DashboardArgs, DoctorArgs, DockerArgs, DockerSubcommand, OutputFormat, ReportArgs,
+    CleanArgs, DashboardArgs, DockerArgs, DockerSubcommand, DoctorArgs, OutputFormat, ReportArgs,
     ScanArgs,
 };
 use crate::docker::{DockerClient, DockerInteractive};
@@ -53,7 +53,9 @@ impl App {
             spinner.set_style(
                 ProgressStyle::default_spinner()
                     .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-                    .template("{spinner:.green} Searching for files >= {msg} in {wide_bar:.cyan}")?,
+                    .template(
+                        "{spinner:.green} Searching for files >= {msg} in {wide_bar:.cyan}",
+                    )?,
             );
             spinner.set_message(format_bytes(min_bytes));
             spinner.enable_steady_tick(std::time::Duration::from_millis(80));
@@ -190,7 +192,8 @@ impl App {
         }
 
         let running_browsers = crate::safety::browser::get_running_browsers();
-        let targets_user_cache = category_filter.is_none() || category_filter == Some(CleanCategory::UserCache);
+        let targets_user_cache =
+            category_filter.is_none() || category_filter == Some(CleanCategory::UserCache);
 
         if !running_browsers.is_empty() && targets_user_cache {
             let browser_names = running_browsers
@@ -198,10 +201,7 @@ impl App {
                 .map(|b| b.name)
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!(
-                "{}",
-                "🌐 ACTIVE BROWSER SAFETY PROTECTION:".bold().yellow()
-            );
+            println!("{}", "🌐 ACTIVE BROWSER SAFETY PROTECTION:".bold().yellow());
             println!(
                 "   {} {}",
                 "Running browser(s) detected:".yellow(),
@@ -209,7 +209,8 @@ impl App {
             );
             println!(
                 "{}",
-                "   To prevent broken web pages, crashed tabs, and extension state issues,".yellow()
+                "   To prevent broken web pages, crashed tabs, and extension state issues,"
+                    .yellow()
             );
             println!(
                 "{}",
@@ -228,18 +229,39 @@ impl App {
             format_bytes(total_reclaimable).bold().green()
         );
 
-
-
-        let has_docker = scanned.iter().any(|(c, _)| c.category() == CleanCategory::Docker);
+        let has_docker = scanned
+            .iter()
+            .any(|(c, _)| c.category() == CleanCategory::Docker);
 
         // Interactive Docker confirmation when executing
         if args.execute && !args.yes && has_docker {
-            println!("{}", "🐳 DOCKER CLEANUP DETAILS & SAFETY WARNING:".bold().yellow());
-            println!("{}", "   • Docker BuildKit build cache will be purged.".yellow());
-            println!("{}", "   • Dangling / untagged images will be removed.".yellow());
+            println!(
+                "{}",
+                "🐳 DOCKER CLEANUP DETAILS & SAFETY WARNING:"
+                    .bold()
+                    .yellow()
+            );
+            println!(
+                "{}",
+                "   • Docker BuildKit build cache will be purged.".yellow()
+            );
+            println!(
+                "{}",
+                "   • Dangling / untagged images will be removed.".yellow()
+            );
             println!("{}", "   • Stopped containers will be pruned.".yellow());
-            println!("{}", "   ⚠️  CRITICAL: Any data stored in container filesystems NOT mounted".yellow().bold());
-            println!("{}", "      in persistent Docker volumes will be PERMANENTLY LOST!\n".yellow().bold());
+            println!(
+                "{}",
+                "   ⚠️  CRITICAL: Any data stored in container filesystems NOT mounted"
+                    .yellow()
+                    .bold()
+            );
+            println!(
+                "{}",
+                "      in persistent Docker volumes will be PERMANENTLY LOST!\n"
+                    .yellow()
+                    .bold()
+            );
 
             let include_docker = Confirm::new()
                 .with_prompt("Do you want to include Docker prune in the cleanup? (Select 'No' to continue without Docker)")
@@ -248,7 +270,10 @@ impl App {
                 .unwrap_or(false);
 
             if !include_docker {
-                println!("{}", "ℹ️  Docker cleanup skipped. Continuing cleanup WITHOUT Docker.\n".cyan());
+                println!(
+                    "{}",
+                    "ℹ️  Docker cleanup skipped. Continuing cleanup WITHOUT Docker.\n".cyan()
+                );
                 scanned.retain(|(c, _)| c.category() != CleanCategory::Docker);
 
                 // Recalculate totals after excluding Docker
@@ -266,13 +291,29 @@ impl App {
         } else if is_dry_run && has_docker {
             // Explicit Docker Warning info in dry-run mode
             println!("{}", "⚠️  DOCKER CONTAINER DATA WARNING:".bold().yellow());
-            println!("{}", "   Docker cleanup will remove stopped containers and build cache.".yellow());
-            println!("{}", "   Any uncommitted data inside container filesystems NOT stored in".yellow());
-            println!("{}", "   persistent Docker volumes or bind-mounts will be PERMANENTLY LOST!\n".yellow().bold());
+            println!(
+                "{}",
+                "   Docker cleanup will remove stopped containers and build cache.".yellow()
+            );
+            println!(
+                "{}",
+                "   Any uncommitted data inside container filesystems NOT stored in".yellow()
+            );
+            println!(
+                "{}",
+                "   persistent Docker volumes or bind-mounts will be PERMANENTLY LOST!\n"
+                    .yellow()
+                    .bold()
+            );
         }
 
         if total_reclaimable == 0 && total_items == 0 {
-            println!("{}", "✨ All selected categories are already clean!".bold().green());
+            println!(
+                "{}",
+                "✨ All selected categories are already clean!"
+                    .bold()
+                    .green()
+            );
             return Ok(());
         }
 
@@ -358,7 +399,9 @@ impl App {
         println!("⏱️  Duration:          {}", format_duration(elapsed));
         println!(
             "💾 Total Space Freed: {}",
-            format_bytes(overall_result.total_bytes_freed).bold().green()
+            format_bytes(overall_result.total_bytes_freed)
+                .bold()
+                .green()
         );
         println!("📁 Items Processed:   {}", overall_result.items_cleaned);
         if overall_result.items_failed > 0 {
@@ -367,7 +410,10 @@ impl App {
                 overall_result.items_failed.to_string().red()
             );
         }
-        println!("📝 Audit Log Saved:   {}", log_path.display().to_string().dimmed());
+        println!(
+            "📝 Audit Log Saved:   {}",
+            log_path.display().to_string().dimmed()
+        );
         println!("--------------------------------------------------");
 
         if is_dry_run {
@@ -393,7 +439,6 @@ impl App {
 
         let operations = read_recent_operations(args.limit)?;
 
-
         if operations.is_empty() {
             println!("{}", "No operation logs found in ~/.cli-ner/logs/".yellow());
             return Ok(());
@@ -415,7 +460,10 @@ impl App {
                 println!("Command:       {}", last_op.command);
                 println!("Dry Run:       {}", last_op.dry_run);
                 println!("Category:      {}", last_op.category);
-                println!("Total Freed:   {}", format_bytes(last_op.total_bytes_freed).green());
+                println!(
+                    "Total Freed:   {}",
+                    format_bytes(last_op.total_bytes_freed).green()
+                );
                 println!("Items:         {}", last_op.total_items_count);
 
                 let mut table = Table::new();
@@ -485,7 +533,12 @@ impl App {
 
     /// Handle `doctor` command
     pub fn handle_doctor(&self, _args: DoctorArgs) -> Result<()> {
-        println!("{}", "🩺 Running macOS System & Environment Diagnostics...\n".bold().cyan());
+        println!(
+            "{}",
+            "🩺 Running macOS System & Environment Diagnostics...\n"
+                .bold()
+                .cyan()
+        );
 
         // 1. Mounted Disks
         println!("{}", "💾 Mounted Disks & Storage:".bold());
@@ -556,9 +609,15 @@ impl App {
         let running_browsers = crate::safety::browser::get_running_browsers();
         println!("{}", "🌐 Active Web Browsers Status:".bold());
         if running_browsers.is_empty() {
-            println!(" • No active web browsers detected (all browser caches can be safely cleaned).");
+            println!(
+                " • No active web browsers detected (all browser caches can be safely cleaned)."
+            );
         } else {
-            let names = running_browsers.iter().map(|b| b.name).collect::<Vec<_>>().join(", ");
+            let names = running_browsers
+                .iter()
+                .map(|b| b.name)
+                .collect::<Vec<_>>()
+                .join(", ");
             println!(" • Active browsers detected: {}", names.yellow().bold());
             println!("   ↳ Caches for these browsers will be automatically protected & excluded during cleanup.");
         }
@@ -603,7 +662,10 @@ impl App {
             Some(DockerSubcommand::Containers(c_args)) => {
                 if c_args.list {
                     let containers = DockerClient::list_containers()?;
-                    println!("\n📦 Docker Containers:\n{}", DockerInteractive::render_containers_table(&containers));
+                    println!(
+                        "\n📦 Docker Containers:\n{}",
+                        DockerInteractive::render_containers_table(&containers)
+                    );
                 } else {
                     DockerInteractive::manage_containers_interactive(args.dry_run)?;
                 }
@@ -611,10 +673,16 @@ impl App {
             Some(DockerSubcommand::Images(i_args)) => {
                 if i_args.list {
                     let images = DockerClient::list_images()?;
-                    println!("\n🖼️  Docker Images:\n{}", DockerInteractive::render_images_table(&images));
+                    println!(
+                        "\n🖼️  Docker Images:\n{}",
+                        DockerInteractive::render_images_table(&images)
+                    );
                 } else if i_args.dangling {
                     if args.dry_run {
-                        println!("{}", "ℹ️ [DRY-RUN] Would run `docker image prune -f`".yellow());
+                        println!(
+                            "{}",
+                            "ℹ️ [DRY-RUN] Would run `docker image prune -f`".yellow()
+                        );
                     } else {
                         println!("{}", "🧹 Pruning dangling images...".cyan());
                         match DockerClient::prune_dangling_images() {
@@ -636,7 +704,10 @@ impl App {
                 let df = DockerClient::get_system_df()?;
                 println!("\n{}", DockerInteractive::render_df_table(&df));
                 let containers = DockerClient::list_containers()?;
-                println!("\n📦 Active & Stopped Containers:\n{}", DockerInteractive::render_containers_table(&containers));
+                println!(
+                    "\n📦 Active & Stopped Containers:\n{}",
+                    DockerInteractive::render_containers_table(&containers)
+                );
             }
         }
 

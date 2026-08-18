@@ -101,9 +101,10 @@ pub fn get_running_browsers() -> Vec<&'static BrowserDefinition> {
             let proc_name = process.name().to_string_lossy();
 
             // 1. Exact match on process name
-            let matches_proc_name = browser.process_names.iter().any(|&expected| {
-                proc_name == expected
-            });
+            let matches_proc_name = browser
+                .process_names
+                .iter()
+                .any(|&expected| proc_name == expected);
 
             if matches_proc_name {
                 return true;
@@ -204,9 +205,6 @@ mod tests {
             is_cache_entry_for_running_browser("com.apple.WebKit.WebContent", &running),
             Some(safari)
         );
-        assert_eq!(
-            is_cache_entry_for_running_browser("Google", &running),
-            None
-        );
+        assert_eq!(is_cache_entry_for_running_browser("Google", &running), None);
     }
 }

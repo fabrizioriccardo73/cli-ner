@@ -57,7 +57,13 @@ impl OperationRecord {
         }
     }
 
-    pub fn add_item(&mut self, path: String, size_bytes: u64, action: ActionType, status: ActionStatus) {
+    pub fn add_item(
+        &mut self,
+        path: String,
+        size_bytes: u64,
+        action: ActionType,
+        status: ActionStatus,
+    ) {
         if matches!(status, ActionStatus::Success) {
             self.total_bytes_freed += size_bytes;
         }
@@ -89,7 +95,8 @@ pub fn save_operation_log(record: &OperationRecord) -> Result<PathBuf> {
     let date_str = record.timestamp.format("%Y-%m-%d").to_string();
     let log_file = log_dir.join(format!("operations_{}.jsonl", date_str));
 
-    let json_line = serde_json::to_string(record).context("Failed to serialize operation record")?;
+    let json_line =
+        serde_json::to_string(record).context("Failed to serialize operation record")?;
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -114,7 +121,7 @@ pub fn read_recent_operations(limit: usize) -> Result<Vec<OperationRecord>> {
     let mut log_files: Vec<PathBuf> = fs::read_dir(&log_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().map_or(false, |ext| ext == "jsonl"))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
         .collect();
 
     log_files.sort_by(|a, b| b.cmp(a)); // Newest first

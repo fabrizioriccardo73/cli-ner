@@ -26,32 +26,29 @@ impl Cleaner for UserCacheCleaner {
         let running_browsers = get_running_browsers();
 
         if cache_dir.is_dir() {
-            for entry in fs::read_dir(&cache_dir)? {
-                if let Ok(entry) = entry {
-                    let name = entry.file_name().to_string_lossy().to_string();
+            for entry in fs::read_dir(&cache_dir)?.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
 
-                    // If a browser is currently running, skip its cache directory to prevent session corruption
-                    if is_cache_entry_for_running_browser(&name, &running_browsers).is_some() {
-                        continue;
-                    }
+                // If a browser is currently running, skip its cache directory to prevent session corruption
+                if is_cache_entry_for_running_browser(&name, &running_browsers).is_some() {
+                    continue;
+                }
 
-                    let path = entry.path();
-                    if let Ok((size, count)) = calculate_size(&path) {
-                        if size > 0 {
-                            items.push(CleanTargetItem {
-                                path,
-                                size_bytes: size,
-                                file_count: count,
-                                description: format!("Cache for {}", name),
-                            });
-                        }
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Cache for {}", name),
+                        });
                     }
                 }
             }
         }
 
-        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
     }
 }
-

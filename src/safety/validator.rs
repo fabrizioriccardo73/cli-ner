@@ -46,7 +46,9 @@ pub fn validate_path_for_cleaning<P: AsRef<Path>>(path: P) -> Result<ValidationR
 
     // 4. If contents_only is true, forbid deleting the parent root folder itself
     let abs_path = if path.is_relative() {
-        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };

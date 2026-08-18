@@ -2,9 +2,11 @@ use crate::cleaner::dev_tools::{DockerCleaner, HomebrewCleaner, NpmCacheCleaner,
 use crate::cleaner::system_cache::UserCacheCleaner;
 use crate::cleaner::system_logs::UserLogsCleaner;
 use crate::cleaner::temp_files::TempFilesCleaner;
-use crate::cleaner::trash::TrashCleaner;
 use crate::cleaner::traits::{CleanTargetItem, Cleaner};
-use crate::cleaner::xcode::{XcodeArchivesCleaner, XcodeDerivedDataCleaner, XcodeDeviceSupportCleaner};
+use crate::cleaner::trash::TrashCleaner;
+use crate::cleaner::xcode::{
+    XcodeArchivesCleaner, XcodeDerivedDataCleaner, XcodeDeviceSupportCleaner,
+};
 use crate::safety::allowlist::CleanCategory;
 use anyhow::Result;
 
@@ -38,11 +40,13 @@ impl CleanerRegistry {
     }
 
     /// Retrieve cleaners filtered by category
+    #[allow(clippy::borrowed_box)]
     pub fn find_by_category(&self, category: CleanCategory) -> Option<&Box<dyn Cleaner>> {
         self.cleaners.iter().find(|c| c.category() == category)
     }
 
     /// Scan all or filtered cleaners and return target items grouped by cleaner
+    #[allow(clippy::borrowed_box, clippy::type_complexity)]
     pub fn scan_all(
         &self,
         category_filter: Option<CleanCategory>,

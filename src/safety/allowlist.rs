@@ -129,7 +129,9 @@ pub const ALLOWED_TARGETS: &[AllowedTarget] = &[
 pub fn find_allowed_target<P: AsRef<Path>>(path: P) -> Option<(&'static AllowedTarget, PathBuf)> {
     let path = path.as_ref();
     let abs_path = if path.is_relative() {
-        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };

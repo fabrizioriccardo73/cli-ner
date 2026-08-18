@@ -47,7 +47,9 @@ pub const USER_BLOCKLIST: &[&str] = &[
 pub fn is_blocked<P: AsRef<Path>>(path: P) -> (bool, Option<String>) {
     let path = path.as_ref();
     let abs_path = if path.is_relative() {
-        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
     } else {
         path.to_path_buf()
     };
@@ -59,7 +61,10 @@ pub fn is_blocked<P: AsRef<Path>>(path: P) -> (bool, Option<String>) {
             return (true, Some(format!("Protected system path: {}", blocked)));
         }
         if blocked_path.starts_with(&abs_path) && abs_path != Path::new("/") {
-            return (true, Some(format!("Parent of protected system path: {}", blocked)));
+            return (
+                true,
+                Some(format!("Parent of protected system path: {}", blocked)),
+            );
         }
     }
 
@@ -69,8 +74,14 @@ pub fn is_blocked<P: AsRef<Path>>(path: P) -> (bool, Option<String>) {
         if abs_path == expanded || abs_path.starts_with(&expanded) {
             return (true, Some(format!("Protected user data path: {}", blocked)));
         }
-        if expanded.starts_with(&abs_path) && abs_path != dirs::home_dir().unwrap_or_default() && abs_path != Path::new("/") {
-            return (true, Some(format!("Parent of protected user path: {}", blocked)));
+        if expanded.starts_with(&abs_path)
+            && abs_path != dirs::home_dir().unwrap_or_default()
+            && abs_path != Path::new("/")
+        {
+            return (
+                true,
+                Some(format!("Parent of protected user path: {}", blocked)),
+            );
         }
     }
 

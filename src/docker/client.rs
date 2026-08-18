@@ -503,12 +503,23 @@ mod tests {
 
     #[test]
     fn test_parse_docker_size() {
-        assert_eq!(DockerClient::parse_size_str("1.84GB"), (1.84 * 1024.0 * 1024.0 * 1024.0) as u64);
-        assert_eq!(DockerClient::parse_size_str("257kB"), (257.0 * 1024.0) as u64);
-        assert_eq!(DockerClient::parse_size_str("10.09GB (71%)"), (10.09 * 1024.0 * 1024.0 * 1024.0) as u64);
-        assert_eq!(DockerClient::parse_size_str("626MB"), (626.0 * 1024.0 * 1024.0) as u64);
+        assert_eq!(
+            DockerClient::parse_size_str("1.84GB"),
+            (1.84 * 1024.0 * 1024.0 * 1024.0) as u64
+        );
+        assert_eq!(
+            DockerClient::parse_size_str("257kB"),
+            (257.0 * 1024.0) as u64
+        );
+        assert_eq!(
+            DockerClient::parse_size_str("10.09GB (71%)"),
+            (10.09 * 1024.0 * 1024.0 * 1024.0) as u64
+        );
+        assert_eq!(
+            DockerClient::parse_size_str("626MB"),
+            (626.0 * 1024.0 * 1024.0) as u64
+        );
         assert_eq!(DockerClient::parse_size_str("0B"), 0);
         assert_eq!(DockerClient::parse_size_str(""), 0);
     }
 }
-

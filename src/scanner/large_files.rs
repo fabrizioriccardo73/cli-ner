@@ -37,7 +37,7 @@ pub fn find_large_files<P: AsRef<Path>>(
     }
 
     // Sort by size descending
-    large_files.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    large_files.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
     large_files.truncate(limit);
 
     Ok(large_files)

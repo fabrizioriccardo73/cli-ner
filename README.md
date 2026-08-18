@@ -2,8 +2,72 @@
 
 > **Advanced, safe, and documented CLI for macOS disk space management and cleanup.**
 
+[![CI](https://github.com/fabrizioriccardo73/cli-ner/actions/workflows/ci.yml/badge.svg)](https://github.com/fabrizioriccardo73/cli-ner/actions/workflows/ci.yml)
+[![GitHub release](https://img.shields.io/github/v/release/fabrizioriccardo73/cli-ner?include_prereleases&style=flat-square)](https://github.com/fabrizioriccardo73/cli-ner/releases)
+[![Homebrew](https://img.shields.io/badge/homebrew-fabrizioriccardo73%2Ftap-orange?style=flat-square&logo=homebrew)](https://github.com/fabrizioriccardo73/homebrew-tap)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey?style=flat-square&logo=apple)](https://apple.com/macos)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+
 [![CsXaLjs.md.jpg](https://iili.io/CsXaLjs.md.jpg)](https://freeimage.host/i/CsXaLjs)
 
+---
+
+## 🚀 Installation & Quick Start
+
+`cli-ner` is designed for macOS (Apple Silicon M1/M2/M3/M4 & Intel).
+
+### Option 1: Homebrew (Recommended)
+
+Install via the official Homebrew tap:
+
+```bash
+# Add tap and install cli-ner
+brew install fabrizioriccardo73/tap/cli-ner
+```
+
+To update in the future:
+```bash
+brew upgrade cli-ner
+```
+
+---
+
+### Option 2: Quick Install Script (Standalone)
+
+Download and install the latest precompiled release binary automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fabrizioriccardo73/cli-ner/master/install.sh | bash
+```
+
+---
+
+### Option 3: Precompiled Binaries (Manual)
+
+Download the pre-built tarball for your Mac architecture directly from the [GitHub Releases](https://github.com/fabrizioriccardo73/cli-ner/releases) page:
+- `cli-ner-vX.Y.Z-aarch64-apple-darwin.tar.gz` (Apple Silicon M1/M2/M3/M4)
+- `cli-ner-vX.Y.Z-x86_64-apple-darwin.tar.gz` (Intel Mac)
+
+Extract and move the binary to your `PATH`:
+```bash
+tar -xzf cli-ner-*-apple-darwin.tar.gz
+sudo mv cli-ner /usr/local/bin/
+```
+
+---
+
+### Option 4: Cargo (From Source)
+
+If you have Rust and Cargo installed:
+
+```bash
+# Install directly from GitHub:
+cargo install --git https://github.com/fabrizioriccardo73/cli-ner
+
+# Or install from a local clone:
+cargo install --path .
+```
 
 ---
 
@@ -30,38 +94,6 @@
 - 🔍 **Disk Analyzer & Large Files Finder**:
   - Directory space usage mapping with percentage breakdown.
   - Recursive search for large files exceeding a customizable threshold (e.g., `--min-size 500MB`).
-
----
-
-## 🚀 Installation & Setup
-
-### Requirements
-- macOS (Apple Silicon or Intel)
-- Rust & Cargo (1.80+)
-
-### Option 1: Install globally via Cargo (Recommended)
-From within the project root directory:
-```bash
-cargo install --path .
-```
-This automatically compiles the optimized release binary and installs it to `~/.cargo/bin/cli-ner` (accessible globally if `~/.cargo/bin` is in your `PATH`).
-
-### Option 2: Build release binary & copy to PATH
-```bash
-cargo build --release
-
-# Copy to system-wide binaries:
-sudo cp target/release/cli-ner /usr/local/bin/
-
-# Or copy to user-local binaries:
-mkdir -p ~/.local/bin && cp target/release/cli-ner ~/.local/bin/
-```
-
-### Option 3: Shell Alias
-Add the following line to your `~/.zshrc` or `~/.bashrc`:
-```bash
-alias cli-ner="/path/to/cli-ner/target/release/cli-ner"
-```
 
 ---
 
@@ -226,6 +258,18 @@ cargo test -- --nocapture
 
 ---
 
+## 🤝 Contributing & Community
+
+Contributions, issues, and feature requests are welcome!
+
+- ⭐️ **Star the repository**: If you find `cli-ner` useful, give it a star on [GitHub](https://github.com/fabrizioriccardo73/cli-ner)!
+- 🐛 **Report a Bug**: Open an issue using our [Bug Report Template](https://github.com/fabrizioriccardo73/cli-ner/issues/new?template=bug_report.yml).
+- 💡 **Suggest a Feature**: Propose a new cache cleanup target using our [Feature Request Template](https://github.com/fabrizioriccardo73/cli-ner/issues/new?template=feature_request.yml).
+- 🛠️ **Submit a PR**: Read [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) for development workflows and safety requirements.
+
+---
+
 ## 📄 License
 
-Distributed under the MIT License.
+Distributed under the MIT License. See [LICENSE](LICENSE) for details.
+

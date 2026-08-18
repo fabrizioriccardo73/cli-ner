@@ -33,9 +33,9 @@ pub fn get_disk_stats() -> Vec<DiskStats> {
 pub fn is_process_running(process_name: &str) -> bool {
     let mut sys = System::new();
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
-    
+
     let target = process_name.to_lowercase();
-    for (_pid, process) in sys.processes() {
+    for process in sys.processes().values() {
         let name = process.name().to_string_lossy().to_lowercase();
         if name.contains(&target) {
             return true;

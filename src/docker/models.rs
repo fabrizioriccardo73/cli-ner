@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockerMount {
-    pub mount_type: String,       // "volume", "bind"
-    pub name: Option<String>,     // Named volume name if applicable
-    pub source: String,           // Source path or volume name
-    pub destination: String,      // Container destination path
-    pub rw: bool,                 // Read/Write
+    pub mount_type: String,   // "volume", "bind"
+    pub name: Option<String>, // Named volume name if applicable
+    pub source: String,       // Source path or volume name
+    pub destination: String,  // Container destination path
+    pub rw: bool,             // Read/Write
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,8 +14,8 @@ pub struct DockerContainer {
     pub id: String,
     pub name: String,
     pub image: String,
-    pub state: String,            // "running", "exited", "paused", "created"
-    pub status: String,           // e.g. "Up 26 hours (healthy)", "Exited (0) 2 days ago"
+    pub state: String,  // "running", "exited", "paused", "created"
+    pub status: String, // e.g. "Up 26 hours (healthy)", "Exited (0) 2 days ago"
     pub created_at: String,
     pub size_bytes: u64,
     pub size_str: String,
@@ -33,7 +33,7 @@ pub struct DockerImage {
     pub created_at: String,
     pub created_since: String,
     pub is_dangling: bool,
-    pub in_use_by: Vec<String>,   // List of container names referencing this image
+    pub in_use_by: Vec<String>, // List of container names referencing this image
 }
 
 impl DockerImage {
@@ -57,7 +57,7 @@ pub struct DockerVolume {
     pub scope: String,
     pub size_str: String,
     pub size_bytes: u64,
-    pub used_by: Vec<String>,     // Names of containers referencing this volume
+    pub used_by: Vec<String>, // Names of containers referencing this volume
 }
 
 impl DockerVolume {

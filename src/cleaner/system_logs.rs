@@ -24,25 +24,23 @@ impl Cleaner for UserLogsCleaner {
         let mut items = Vec::new();
 
         if logs_dir.is_dir() {
-            for entry in fs::read_dir(&logs_dir)? {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if let Ok((size, count)) = calculate_size(&path) {
-                        if size > 0 {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            items.push(CleanTargetItem {
-                                path,
-                                size_bytes: size,
-                                file_count: count,
-                                description: format!("Logs for {}", name),
-                            });
-                        }
+            for entry in fs::read_dir(&logs_dir)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Logs for {}", name),
+                        });
                     }
                 }
             }
         }
 
-        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
     }
 }

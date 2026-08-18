@@ -1,0 +1,38 @@
+name: 💡 Feature or Target Suggestion
+description: Propose a new cleanup target, developer tool integration, or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for a new cache target (e.g., Gradle, Cargo, Bun, CocoaPods) or a CLI enhancement? Let us know!
+  - type: input
+    id: feature_title
+    attributes:
+      label: Feature / Target Name
+      description: Brief name of the feature or developer tool/target
+      placeholder: e.g. "Support for Bun cache cleanup" or "Export logs to CSV"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: Is your feature request related to a problem? What space or workflow does it improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution / Paths
+      description: Describe the solution. If proposing a cache target, please specify standard macOS paths (e.g. `~/.bun/install/cache`).
+    validations:
+      required: true
+  - type: textarea
+    id: safety_considerations
+    attributes:
+      label: Safety & Process Check Considerations
+      description: Are there active background processes to check before touching these files? Can these files be safely moved to Trash?
+    validations:
+      required: false

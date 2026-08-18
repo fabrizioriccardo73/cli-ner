@@ -91,11 +91,7 @@ impl DockerInteractive {
             ]);
 
         for c in containers {
-            let short_id = if c.id.len() >= 12 {
-                &c.id[..12]
-            } else {
-                &c.id
-            };
+            let short_id = if c.id.len() >= 12 { &c.id[..12] } else { &c.id };
 
             let state_cell = if c.is_running {
                 Cell::new(format!("🟢 RUNNING ({})", c.status)).fg(Color::Green)
@@ -246,15 +242,17 @@ impl DockerInteractive {
             );
             println!(
                 "{}",
-                "Please start Docker Desktop or the Docker daemon and try again."
-                    .yellow()
+                "Please start Docker Desktop or the Docker daemon and try again.".yellow()
             );
             return Ok(());
         }
 
         loop {
             let df = DockerClient::get_system_df()?;
-            println!("\n{}", "🐳 CLI-NER DOCKER MANAGEMENT & SAFETY WIZARD".bold().cyan());
+            println!(
+                "\n{}",
+                "🐳 CLI-NER DOCKER MANAGEMENT & SAFETY WIZARD".bold().cyan()
+            );
             println!("{}\n", "=".repeat(60).dimmed());
             println!("{}", Self::render_df_table(&df));
             println!("\n{}", "Select an action:".bold().white());
@@ -295,7 +293,10 @@ impl DockerInteractive {
                     let df = DockerClient::get_system_df()?;
                     println!("\n{}", Self::render_df_table(&df));
                     let containers = DockerClient::list_containers()?;
-                    println!("\n📦 Containers Overview:\n{}", Self::render_containers_table(&containers));
+                    println!(
+                        "\n📦 Containers Overview:\n{}",
+                        Self::render_containers_table(&containers)
+                    );
                 }
                 _ => {
                     println!("{}", "\n👋 Exiting Docker Manager.".cyan());
@@ -309,14 +310,10 @@ impl DockerInteractive {
 
     /// Step-by-step guided cleanup wizard
     pub fn run_guided_cleanup_wizard(dry_run: bool) -> Result<()> {
-        println!(
-            "\n{}",
-            "🧙 GUIDED DOCKER SAFE CLEANUP WIZARD".bold().cyan()
-        );
+        println!("\n{}", "🧙 GUIDED DOCKER SAFE CLEANUP WIZARD".bold().cyan());
         println!(
             "{}",
-            "We will safely inspect and clean Docker components one step at a time."
-                .white()
+            "We will safely inspect and clean Docker components one step at a time.".white()
         );
         println!(
             "{}",
@@ -334,8 +331,7 @@ impl DockerInteractive {
         if stopped_containers.is_empty() {
             println!(
                 "{}",
-                "✅ No stopped containers found. Active containers are safely running."
-                    .green()
+                "✅ No stopped containers found. Active containers are safely running.".green()
             );
         } else {
             println!(
@@ -346,7 +342,10 @@ impl DockerInteractive {
         }
 
         // Step 2: Build Cache
-        println!("\n{}", "--- Step 2/3: BuildKit Build Cache ---".bold().yellow());
+        println!(
+            "\n{}",
+            "--- Step 2/3: BuildKit Build Cache ---".bold().yellow()
+        );
         let df = DockerClient::get_system_df()?;
         if df.build_cache_total == 0 || df.build_cache_size_str == "0B" {
             println!("{}", "✅ Build cache is already clean.".green());
@@ -364,7 +363,10 @@ impl DockerInteractive {
 
             if prune_cache {
                 if dry_run {
-                    println!("{}", "ℹ️ [DRY-RUN] Would run `docker builder prune -f`".yellow());
+                    println!(
+                        "{}",
+                        "ℹ️ [DRY-RUN] Would run `docker builder prune -f`".yellow()
+                    );
                 } else {
                     println!("{}", "🧹 Purging build cache...".cyan());
                     match DockerClient::prune_build_cache() {
@@ -379,12 +381,21 @@ impl DockerInteractive {
         println!("\n{}", "--- Step 3/3: Images Cleanup ---".bold().yellow());
         let images = DockerClient::list_images()?;
         let dangling_count = images.iter().filter(|i| i.is_dangling).count();
-        let unused_count = images.iter().filter(|i| !i.is_dangling && !i.is_in_use()).count();
+        let unused_count = images
+            .iter()
+            .filter(|i| !i.is_dangling && !i.is_in_use())
+            .count();
 
         println!(
             "Images found: {} total (🔒 {} in-use, 🧹 {} dangling, 📦 {} unused tagged).",
             images.len().to_string().bold().white(),
-            images.iter().filter(|i| i.is_in_use()).count().to_string().bold().green(),
+            images
+                .iter()
+                .filter(|i| i.is_in_use())
+                .count()
+                .to_string()
+                .bold()
+                .green(),
             dangling_count.to_string().bold().magenta(),
             unused_count.to_string().bold().yellow()
         );
@@ -401,7 +412,10 @@ impl DockerInteractive {
 
             if prune_dangling {
                 if dry_run {
-                    println!("{}", "ℹ️ [DRY-RUN] Would run `docker image prune -f`".yellow());
+                    println!(
+                        "{}",
+                        "ℹ️ [DRY-RUN] Would run `docker image prune -f`".yellow()
+                    );
                 } else {
                     println!("{}", "🧹 Pruning dangling images...".cyan());
                     match DockerClient::prune_dangling_images() {
@@ -427,10 +441,7 @@ impl DockerInteractive {
             }
         }
 
-        println!(
-            "\n{}",
-            "✨ Guided Docker cleanup completed!".bold().green()
-        );
+        println!("\n{}", "✨ Guided Docker cleanup completed!".bold().green());
         Ok(())
     }
 
@@ -492,14 +503,21 @@ impl DockerInteractive {
             return Ok(());
         }
 
-        let selected_containers: Vec<&&DockerContainer> =
-            selections.iter().map(|&idx| &stopped_containers[idx]).collect();
+        let selected_containers: Vec<&&DockerContainer> = selections
+            .iter()
+            .map(|&idx| &stopped_containers[idx])
+            .collect();
 
         // Safety check for attached volumes
         let mut has_attached_mounts = false;
         println!("\n{}", "⚠️ Containers to be removed:".bold().yellow());
         for c in &selected_containers {
-            println!("  • {} ({}) [ID: {}]", c.name.bold(), c.image, &c.id[..c.id.len().min(12)]);
+            println!(
+                "  • {} ({}) [ID: {}]",
+                c.name.bold(),
+                c.image,
+                &c.id[..c.id.len().min(12)]
+            );
             if !c.mounts.is_empty() {
                 has_attached_mounts = true;
                 for m in &c.mounts {
@@ -540,13 +558,16 @@ impl DockerInteractive {
             return Ok(());
         }
 
-        let ids_to_remove: Vec<String> =
-            selected_containers.iter().map(|c| c.id.clone()).collect();
+        let ids_to_remove: Vec<String> = selected_containers.iter().map(|c| c.id.clone()).collect();
 
         if dry_run {
             println!(
                 "{}",
-                format!("ℹ️ [DRY-RUN] Would remove container IDs: {:?}", ids_to_remove).yellow()
+                format!(
+                    "ℹ️ [DRY-RUN] Would remove container IDs: {:?}",
+                    ids_to_remove
+                )
+                .yellow()
             );
         } else {
             println!("{}", "🗑️ Removing selected containers...".cyan());
@@ -583,8 +604,7 @@ impl DockerInteractive {
         println!("\n{}", "🖼️ Current Docker Images:".bold().cyan());
         println!("{}", Self::render_images_table(&images));
 
-        let unused_images: Vec<&DockerImage> =
-            images.iter().filter(|i| !i.is_in_use()).collect();
+        let unused_images: Vec<&DockerImage> = images.iter().filter(|i| !i.is_in_use()).collect();
 
         if unused_images.is_empty() {
             println!(
@@ -617,7 +637,11 @@ impl DockerInteractive {
                 } else {
                     "📦 [UNUSED]".yellow()
                 };
-                let short_id = if img.id.len() >= 12 { &img.id[..12] } else { &img.id };
+                let short_id = if img.id.len() >= 12 {
+                    &img.id[..12]
+                } else {
+                    &img.id
+                };
                 format!(
                     "{} {} ({}) - Size: {} - Created: {}",
                     tag_type,
@@ -659,10 +683,7 @@ impl DockerInteractive {
             format_bytes(total_size).bold().green()
         );
 
-        let confirm_prompt = format!(
-            "Permanently delete {} image(s)?",
-            selected_images.len()
-        );
+        let confirm_prompt = format!("Permanently delete {} image(s)?", selected_images.len());
 
         let confirmed = Confirm::new()
             .with_prompt(confirm_prompt)
@@ -689,7 +710,11 @@ impl DockerInteractive {
         if dry_run {
             println!(
                 "{}",
-                format!("ℹ️ [DRY-RUN] Would run `docker rmi` on: {:?}", targets_to_remove).yellow()
+                format!(
+                    "ℹ️ [DRY-RUN] Would run `docker rmi` on: {:?}",
+                    targets_to_remove
+                )
+                .yellow()
             );
         } else {
             println!("{}", "🗑️ Removing selected images...".cyan());
@@ -697,9 +722,12 @@ impl DockerInteractive {
                 Ok(removed) => {
                     println!(
                         "{}",
-                        format!("✅ Successfully removed {} image tag(s)/layer(s):", removed.len())
-                            .bold()
-                            .green()
+                        format!(
+                            "✅ Successfully removed {} image tag(s)/layer(s):",
+                            removed.len()
+                        )
+                        .bold()
+                        .green()
                     );
                     for line in removed {
                         println!("  - {}", line);
@@ -725,7 +753,9 @@ impl DockerInteractive {
         );
 
         let confirmed = Confirm::new()
-            .with_prompt("Purge Docker BuildKit build cache? (100% safe, layers are rebuilt as needed)")
+            .with_prompt(
+                "Purge Docker BuildKit build cache? (100% safe, layers are rebuilt as needed)",
+            )
             .default(true)
             .interact()
             .unwrap_or(false);
@@ -736,7 +766,10 @@ impl DockerInteractive {
         }
 
         if dry_run {
-            println!("{}", "ℹ️ [DRY-RUN] Would execute `docker builder prune -f`".yellow());
+            println!(
+                "{}",
+                "ℹ️ [DRY-RUN] Would execute `docker builder prune -f`".yellow()
+            );
         } else {
             println!("{}", "🧹 Purging build cache...".cyan());
             match DockerClient::prune_build_cache() {
@@ -751,13 +784,15 @@ impl DockerInteractive {
     /// Volume safety audit
     pub fn audit_volumes_interactive() -> Result<()> {
         let volumes = DockerClient::list_volumes()?;
-        println!("\n{}", "💾 DOCKER VOLUMES & PERSISTENT DATA SAFETY AUDIT".bold().cyan());
+        println!(
+            "\n{}",
+            "💾 DOCKER VOLUMES & PERSISTENT DATA SAFETY AUDIT"
+                .bold()
+                .cyan()
+        );
         println!("{}\n", "=".repeat(60).dimmed());
 
-        println!(
-            "{}",
-            "🚨 CRITICAL VOLUME SAFETY NOTICE:".bold().red()
-        );
+        println!("{}", "🚨 CRITICAL VOLUME SAFETY NOTICE:".bold().red());
         println!(
             "{}",
             "• Docker volumes store databases (PostgreSQL, MongoDB, MySQL, MSSQL) and application state."
@@ -765,8 +800,7 @@ impl DockerInteractive {
         );
         println!(
             "{}",
-            "• Deleting a volume PERMANENTLY DESTROYS the data stored within it."
-                .yellow()
+            "• Deleting a volume PERMANENTLY DESTROYS the data stored within it.".yellow()
         );
         println!(
             "{}",

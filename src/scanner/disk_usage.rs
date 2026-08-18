@@ -24,23 +24,21 @@ pub fn scan_directory_entries<P: AsRef<Path>>(
     let mut total_size = 0u64;
 
     if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            if let Ok(entry) = entry {
-                let entry_path = entry.path();
-                if let Ok((size, count)) = calculate_size(&entry_path) {
-                    total_size += size;
-                    entries.push(ScannedDirectory {
-                        path: entry_path,
-                        size_bytes: size,
-                        file_count: count,
-                    });
-                }
+        for entry in fs::read_dir(path)?.flatten() {
+            let entry_path = entry.path();
+            if let Ok((size, count)) = calculate_size(&entry_path) {
+                total_size += size;
+                entries.push(ScannedDirectory {
+                    path: entry_path,
+                    size_bytes: size,
+                    file_count: count,
+                });
             }
         }
     }
 
     // Sort by size descending
-    entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
     entries.truncate(top_n);
 
     Ok((entries, total_size))

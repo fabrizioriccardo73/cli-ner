@@ -116,9 +116,7 @@ pub fn move_to_trash_silent<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
             } else {
                 fs::copy(path, &dest_path)
                     .and_then(|_| fs::remove_file(path))
-                    .with_context(|| {
-                        format!("Failed to move file to trash: {}", rename_err)
-                    })?;
+                    .with_context(|| format!("Failed to move file to trash: {}", rename_err))?;
                 Ok(dest_path)
             }
         }

@@ -46,7 +46,7 @@ impl Cleaner for TempFilesCleaner {
             }
         }
 
-        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
     }
 }

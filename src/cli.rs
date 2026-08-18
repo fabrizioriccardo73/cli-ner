@@ -171,4 +171,3 @@ pub struct DockerImagesArgs {
     #[arg(short, long)]
     pub dangling: bool,
 }
-

@@ -159,7 +159,10 @@ impl Cleaner for NpmCacheCleaner {
             return Ok(result);
         }
 
-        match Command::new("npm").args(["cache", "clean", "--force"]).status() {
+        match Command::new("npm")
+            .args(["cache", "clean", "--force"])
+            .status()
+        {
             Ok(s) if s.success() => {
                 result.total_bytes_freed = total_size;
                 result.items_cleaned = 1;
@@ -176,7 +179,9 @@ impl Cleaner for NpmCacheCleaner {
                     path: "npm cache clean --force".into(),
                     size_bytes: 0,
                     action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed("npm cache clean returned non-zero exit code".into()),
+                    status: ActionStatus::Failed(
+                        "npm cache clean returned non-zero exit code".into(),
+                    ),
                 });
             }
             Err(e) => {
@@ -251,7 +256,12 @@ impl Cleaner for PipCacheCleaner {
             return Ok(result);
         }
 
-        let cmd = if Command::new("which").arg("pip3").output().map(|o| o.status.success()).unwrap_or(false) {
+        let cmd = if Command::new("which")
+            .arg("pip3")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             "pip3"
         } else {
             "pip"
@@ -274,7 +284,10 @@ impl Cleaner for PipCacheCleaner {
                     path: format!("{} cache purge", cmd),
                     size_bytes: 0,
                     action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed(format!("{} cache purge returned non-zero exit code", cmd)),
+                    status: ActionStatus::Failed(format!(
+                        "{} cache purge returned non-zero exit code",
+                        cmd
+                    )),
                 });
             }
             Err(e) => {
@@ -307,14 +320,16 @@ struct DockerDfItem {
     reclaimable: Option<String>,
 }
 
-
 fn parse_docker_size_str(s: &str) -> u64 {
     let main_part = s.split_whitespace().next().unwrap_or(s).trim();
     if main_part.is_empty() {
         return 0;
     }
     let lower = main_part.to_lowercase();
-    let num_str: String = lower.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    let num_str: String = lower
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     let num: f64 = num_str.parse().unwrap_or(0.0);
     if lower.ends_with("tb") || lower.ends_with("tib") {
         (num * 1024.0 * 1024.0 * 1024.0 * 1024.0) as u64
@@ -324,8 +339,6 @@ fn parse_docker_size_str(s: &str) -> u64 {
         (num * 1024.0 * 1024.0) as u64
     } else if lower.ends_with("kb") || lower.ends_with("kib") || lower.ends_with("k") {
         (num * 1024.0) as u64
-    } else if lower.ends_with('b') {
-        num as u64
     } else {
         num as u64
     }
@@ -360,7 +373,10 @@ impl Cleaner for DockerCleaner {
         let mut items = Vec::new();
 
         // Run `docker system df --format "{{json .}}"`
-        if let Ok(output) = Command::new("docker").args(["system", "df", "--format", "{{json .}}"]).output() {
+        if let Ok(output) = Command::new("docker")
+            .args(["system", "df", "--format", "{{json .}}"])
+            .output()
+        {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 for line in stdout.lines() {
@@ -376,7 +392,8 @@ impl Cleaner for DockerCleaner {
                                 path: "docker:build-cache".into(),
                                 size_bytes,
                                 file_count: count,
-                                description: "Docker BuildKit build cache (100% safe to clear)".into(),
+                                description: "Docker BuildKit build cache (100% safe to clear)"
+                                    .into(),
                             });
                         } else if t_name.contains("Images") {
                             items.push(CleanTargetItem {
@@ -404,7 +421,9 @@ impl Cleaner for DockerCleaner {
                 path: expand_tilde("~/Library/Containers/com.docker.docker/Data"),
                 size_bytes: 0,
                 file_count: 0,
-                description: "Docker build cache and dangling containers (⚠️ Unmounted container data lost)".into(),
+                description:
+                    "Docker build cache and dangling containers (⚠️ Unmounted container data lost)"
+                        .into(),
             });
         }
 
@@ -434,7 +453,9 @@ impl Cleaner for DockerCleaner {
         let mut total_freed = 0u64;
 
         // 1. Build cache
-        let b_res = Command::new("docker").args(["builder", "prune", "-f"]).status();
+        let b_res = Command::new("docker")
+            .args(["builder", "prune", "-f"])
+            .status();
         let b_size = targets
             .iter()
             .find(|t| t.path.to_string_lossy().contains("build-cache"))
@@ -454,7 +475,9 @@ impl Cleaner for DockerCleaner {
         }
 
         // 2. Images prune
-        let i_res = Command::new("docker").args(["image", "prune", "-f"]).status();
+        let i_res = Command::new("docker")
+            .args(["image", "prune", "-f"])
+            .status();
         let i_size = targets
             .iter()
             .find(|t| t.path.to_string_lossy().contains("dangling-images"))
@@ -474,7 +497,9 @@ impl Cleaner for DockerCleaner {
         }
 
         // 3. Container prune
-        let c_res = Command::new("docker").args(["container", "prune", "-f"]).status();
+        let c_res = Command::new("docker")
+            .args(["container", "prune", "-f"])
+            .status();
         let c_size = targets
             .iter()
             .find(|t| t.path.to_string_lossy().contains("stopped-containers"))
@@ -493,9 +518,7 @@ impl Cleaner for DockerCleaner {
             }
         }
 
-
         result.total_bytes_freed = total_freed;
         Ok(result)
     }
 }
-

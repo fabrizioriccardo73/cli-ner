@@ -29,25 +29,23 @@ impl Cleaner for XcodeDerivedDataCleaner {
         let mut items = Vec::new();
 
         if dir.is_dir() {
-            for entry in fs::read_dir(&dir)? {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if let Ok((size, count)) = calculate_size(&path) {
-                        if size > 0 {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            items.push(CleanTargetItem {
-                                path,
-                                size_bytes: size,
-                                file_count: count,
-                                description: format!("Xcode DerivedData for {}", name),
-                            });
-                        }
+            for entry in fs::read_dir(&dir)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Xcode DerivedData for {}", name),
+                        });
                     }
                 }
             }
         }
 
-        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
     }
 }
@@ -72,25 +70,23 @@ impl Cleaner for XcodeArchivesCleaner {
         let mut items = Vec::new();
 
         if dir.is_dir() {
-            for entry in fs::read_dir(&dir)? {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if let Ok((size, count)) = calculate_size(&path) {
-                        if size > 0 {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            items.push(CleanTargetItem {
-                                path,
-                                size_bytes: size,
-                                file_count: count,
-                                description: format!("Xcode Archive {}", name),
-                            });
-                        }
+            for entry in fs::read_dir(&dir)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Xcode Archive {}", name),
+                        });
                     }
                 }
             }
         }
 
-        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
     }
 }
@@ -115,25 +111,23 @@ impl Cleaner for XcodeDeviceSupportCleaner {
         let mut items = Vec::new();
 
         if dir.is_dir() {
-            for entry in fs::read_dir(&dir)? {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if let Ok((size, count)) = calculate_size(&path) {
-                        if size > 0 {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            items.push(CleanTargetItem {
-                                path,
-                                size_bytes: size,
-                                file_count: count,
-                                description: format!("iOS DeviceSupport for {}", name),
-                            });
-                        }
+            for entry in fs::read_dir(&dir)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("iOS DeviceSupport for {}", name),
+                        });
                     }
                 }
             }
         }
 
-        items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
     }
 }

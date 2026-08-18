@@ -125,6 +125,8 @@ fn test_cli_docker_volumes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("DOCKER VOLUMES & PERSISTENT DATA SAFETY AUDIT") || stdout.contains("Docker is not available"));
+    assert!(
+        stdout.contains("DOCKER VOLUMES & PERSISTENT DATA SAFETY AUDIT")
+            || stdout.contains("Docker is not available")
+    );
 }
-

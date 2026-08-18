@@ -38,7 +38,9 @@ pub fn parse_size_to_bytes(size_str: &str) -> Result<u64> {
         }
     }
 
-    let value: f64 = num_str.parse().map_err(|_| anyhow::anyhow!("Invalid number in {}", size_str))?;
+    let value: f64 = num_str
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid number in {}", size_str))?;
     let unit = unit_str.to_uppercase();
 
     let multiplier: f64 = match unit.as_str() {
@@ -47,7 +49,11 @@ pub fn parse_size_to_bytes(size_str: &str) -> Result<u64> {
         "M" | "MB" | "MIB" => 1_000_000.0,
         "G" | "GB" | "GIB" => 1_000_000_000.0,
         "T" | "TB" | "TIB" => 1_000_000_000_000.0,
-        _ => bail!("Unknown unit '{}' in {}. Supported: B, KB, MB, GB, TB", unit_str, size_str),
+        _ => bail!(
+            "Unknown unit '{}' in {}. Supported: B, KB, MB, GB, TB",
+            unit_str,
+            size_str
+        ),
     };
 
     Ok((value * multiplier) as u64)
@@ -61,7 +67,10 @@ mod tests {
     fn test_format_bytes() {
         assert_eq!(format_bytes(0), "0 B");
         assert!(format_bytes(1000).contains("kB") || format_bytes(1000).contains("1 kB"));
-        assert!(format_bytes(1_000_000_000).contains("GB") || format_bytes(1_000_000_000).contains("1 GB"));
+        assert!(
+            format_bytes(1_000_000_000).contains("GB")
+                || format_bytes(1_000_000_000).contains("1 GB")
+        );
     }
 
     #[test]

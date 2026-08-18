@@ -13,8 +13,8 @@ use ratatui::{
     symbols,
     text::{Line, Span},
     widgets::{
-        Bar, BarChart, BarGroup, Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState,
-        Tabs, Wrap,
+        Bar, BarChart, BarGroup, Block, BorderType, Borders, Cell, Paragraph, Row, Table,
+        TableState, Tabs, Wrap,
     },
     Frame, Terminal,
 };
@@ -203,10 +203,10 @@ fn main_loop(
                         ActiveTab::OperationDetails => app.previous_detail_item(),
                         ActiveTab::CategoryStats => {}
                     },
-                    KeyCode::Enter | KeyCode::Char('d') => {
-                        if app.active_tab == ActiveTab::Operations {
-                            app.active_tab = ActiveTab::OperationDetails;
-                        }
+                    KeyCode::Enter | KeyCode::Char('d')
+                        if app.active_tab == ActiveTab::Operations =>
+                    {
+                        app.active_tab = ActiveTab::OperationDetails;
                     }
                     _ => {}
                 }
@@ -262,11 +262,24 @@ fn render_header(f: &mut Frame, area: Rect, app: &DashboardApp) {
     let executed_ops = app.records.iter().filter(|r| !r.dry_run).count();
 
     let header_text = Line::from(vec![
-        Span::styled(" 🧹 CLI-NER Audit Dashboard ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " 🧹 CLI-NER Audit Dashboard ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" │ Total Reclaimed: "),
-        Span::styled(format_bytes(total_freed), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format_bytes(total_freed),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" │ Operations: "),
-        Span::styled(format!("{total_ops} ({executed_ops} executed)"), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            format!("{total_ops} ({executed_ops} executed)"),
+            Style::default().fg(Color::Yellow),
+        ),
     ]);
 
     let header_block = Block::default()
@@ -322,9 +335,23 @@ fn render_operations_tab(f: &mut Frame, area: Rect, app: &mut DashboardApp) {
         return;
     }
 
-    let header_cells = ["Timestamp (UTC)", "Command", "Category", "Mode", "Space Freed", "Items Count", "Duration"]
-        .into_iter()
-        .map(|h| Cell::from(h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+    let header_cells = [
+        "Timestamp (UTC)",
+        "Command",
+        "Category",
+        "Mode",
+        "Space Freed",
+        "Items Count",
+        "Duration",
+    ]
+    .into_iter()
+    .map(|h| {
+        Cell::from(h).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+    });
     let header = Row::new(header_cells).height(1).bottom_margin(1);
 
     let rows = app.records.iter().map(|rec| {
@@ -332,10 +359,18 @@ fn render_operations_tab(f: &mut Frame, area: Rect, app: &mut DashboardApp) {
         let mode_span = if rec.dry_run {
             Span::styled("DRY-RUN", Style::default().fg(Color::Yellow))
         } else {
-            Span::styled("EXECUTED", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            Span::styled(
+                "EXECUTED",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
         };
         let freed_span = if rec.total_bytes_freed > 0 {
-            Span::styled(format_bytes(rec.total_bytes_freed), Style::default().fg(Color::Green))
+            Span::styled(
+                format_bytes(rec.total_bytes_freed),
+                Style::default().fg(Color::Green),
+            )
         } else {
             Span::raw("0 B")
         };
@@ -406,25 +441,50 @@ fn render_details_tab(f: &mut Frame, area: Rect, app: &mut DashboardApp) {
         .split(area);
 
     // Summary of selected operation
-    let mode_str = if current_record.dry_run { "DRY-RUN" } else { "EXECUTED" };
+    let mode_str = if current_record.dry_run {
+        "DRY-RUN"
+    } else {
+        "EXECUTED"
+    };
     let summary_text = vec![
         Line::from(vec![
             Span::styled("ID: ", Style::default().fg(Color::DarkGray)),
             Span::styled(&current_record.id, Style::default().fg(Color::White)),
             Span::styled(" │ Time: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(current_record.timestamp.to_rfc3339(), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                current_record.timestamp.to_rfc3339(),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::styled(" │ Category: ", Style::default().fg(Color::DarkGray)),
             Span::styled(&current_record.category, Style::default().fg(Color::Yellow)),
             Span::styled(" │ Mode: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(mode_str, if current_record.dry_run { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Green) }),
+            Span::styled(
+                mode_str,
+                if current_record.dry_run {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
         ]),
         Line::from(vec![
             Span::styled("Space Reclaimed: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format_bytes(current_record.total_bytes_freed), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format_bytes(current_record.total_bytes_freed),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" │ Total Items: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(current_record.total_items_count.to_string(), Style::default().fg(Color::White)),
+            Span::styled(
+                current_record.total_items_count.to_string(),
+                Style::default().fg(Color::White),
+            ),
             Span::styled(" │ Duration: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ms", current_record.duration_ms), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{} ms", current_record.duration_ms),
+                Style::default().fg(Color::White),
+            ),
         ]),
     ];
 
@@ -442,17 +502,30 @@ fn render_details_tab(f: &mut Frame, area: Rect, app: &mut DashboardApp) {
     // Items table
     let header_cells = ["Target / Item Path", "Size", "Action Type", "Status"]
         .into_iter()
-        .map(|h| Cell::from(h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+        .map(|h| {
+            Cell::from(h).style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        });
     let header = Row::new(header_cells).height(1).bottom_margin(1);
 
     let rows = current_record.items.iter().map(|item| {
         let status_span = match &item.status {
             ActionStatus::Success => Span::styled("Success", Style::default().fg(Color::Green)),
-            ActionStatus::Failed(e) => Span::styled(format!("Failed: {e}"), Style::default().fg(Color::Red)),
-            ActionStatus::Skipped(e) => Span::styled(format!("Skipped: {e}"), Style::default().fg(Color::Yellow)),
+            ActionStatus::Failed(e) => {
+                Span::styled(format!("Failed: {e}"), Style::default().fg(Color::Red))
+            }
+            ActionStatus::Skipped(e) => {
+                Span::styled(format!("Skipped: {e}"), Style::default().fg(Color::Yellow))
+            }
         };
 
-        let action_span = Span::styled(format!("{:?}", item.action), Style::default().fg(Color::Magenta));
+        let action_span = Span::styled(
+            format!("{:?}", item.action),
+            Style::default().fg(Color::Magenta),
+        );
 
         let cells = vec![
             Cell::from(item.path.clone()),
@@ -514,7 +587,13 @@ fn render_stats_tab(f: &mut Frame, area: Rect, app: &DashboardApp) {
     // Left: Breakdown Table
     let header_cells = ["Category", "Total Space Reclaimed", "Cleaned Count"]
         .into_iter()
-        .map(|h| Cell::from(h).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+        .map(|h| {
+            Cell::from(h).style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        });
     let header = Row::new(header_cells).height(1).bottom_margin(1);
 
     let mut cat_entries: Vec<(String, u64, usize)> = category_sizes
@@ -525,7 +604,7 @@ fn render_stats_tab(f: &mut Frame, area: Rect, app: &DashboardApp) {
         })
         .collect();
 
-    cat_entries.sort_by(|a, b| b.1.cmp(&a.1));
+    cat_entries.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let rows = cat_entries.iter().map(|(cat, size, count)| {
         let cells = vec![
@@ -560,12 +639,16 @@ fn render_stats_tab(f: &mut Frame, area: Rect, app: &DashboardApp) {
         .iter()
         .take(6)
         .map(|(cat, size, _)| {
-            let mb = (*size / (1024 * 1024)) as u64;
+            let mb = *size / (1024 * 1024);
             Bar::default()
                 .label(Line::from(cat.as_str()))
                 .value(mb)
                 .style(Style::default().fg(Color::LightGreen))
-                .value_style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                .value_style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )
         })
         .collect();
 
@@ -585,7 +668,7 @@ fn render_stats_tab(f: &mut Frame, area: Rect, app: &DashboardApp) {
         .max(
             cat_entries
                 .first()
-                .map(|(_, s, _)| (*s / (1024 * 1024)) as u64)
+                .map(|(_, s, _)| *s / (1024 * 1024))
                 .unwrap_or(100),
         );
 
@@ -598,11 +681,20 @@ fn render_footer(f: &mut Frame, area: Rect) {
         Span::raw(" Quit  "),
         Span::styled(" [Tab] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
         Span::raw(" Switch Tab  "),
-        Span::styled(" [1/2/3] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+        Span::styled(
+            " [1/2/3] ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
         Span::raw(" Direct Tab  "),
-        Span::styled(" [↑/↓] / [j/k] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+        Span::styled(
+            " [↑/↓] / [j/k] ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
         Span::raw(" Select Item  "),
-        Span::styled(" [Enter/d] ", Style::default().fg(Color::Black).bg(Color::Cyan)),
+        Span::styled(
+            " [Enter/d] ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
         Span::raw(" View Details "),
     ]);
 
