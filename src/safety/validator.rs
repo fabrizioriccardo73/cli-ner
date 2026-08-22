@@ -74,6 +74,85 @@ pub fn validate_path_for_cleaning<P: AsRef<Path>>(path: P) -> Result<ValidationR
     })
 }
 
+/// Strict validation specifically for project build artifacts before deletion or trashing.
+pub fn validate_project_artifact_for_cleaning<P1: AsRef<Path>, P2: AsRef<Path>>(
+    artifact_path: P1,
+    project_root: P2,
+) -> Result<()> {
+    let artifact_path = artifact_path.as_ref();
+    let project_root = project_root.as_ref();
+
+    // 1. Check existence
+    if !artifact_path.exists() && !is_symlink(artifact_path) {
+        bail!("Artifact path does not exist: {}", artifact_path.display());
+    }
+
+    // 2. Strict blocklist check
+    let (blocked, reason) = is_blocked(artifact_path);
+    if blocked {
+        bail!(
+            "SECURITY: Path is blocked: {} ({})",
+            artifact_path.display(),
+            reason.unwrap_or_default()
+        );
+    }
+
+    // 3. Prevent deleting project root itself
+    let abs_artifact = if artifact_path.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(artifact_path))
+            .unwrap_or_else(|_| artifact_path.to_path_buf())
+    } else {
+        artifact_path.to_path_buf()
+    };
+
+    let abs_root = if project_root.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(project_root))
+            .unwrap_or_else(|_| project_root.to_path_buf())
+    } else {
+        project_root.to_path_buf()
+    };
+
+    if abs_artifact == abs_root {
+        bail!(
+            "SECURITY: Cannot delete project root folder itself: {}",
+            project_root.display()
+        );
+    }
+
+    if !abs_artifact.starts_with(&abs_root) {
+        bail!(
+            "SECURITY: Artifact {} is not inside project root {}",
+            artifact_path.display(),
+            project_root.display()
+        );
+    }
+
+    // 4. Artifact directory name must be an allowed artifact name
+    let dir_name = artifact_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+
+    if !crate::projects::detector::ALLOWED_ARTIFACT_NAMES.contains(&dir_name) {
+        bail!(
+            "SECURITY: '{}' is not an authorized project build artifact name",
+            dir_name
+        );
+    }
+
+    // 5. Must NOT be .git or contain .git
+    if dir_name == ".git" || abs_artifact.join(".git").exists() {
+        bail!(
+            "SECURITY: Refusing to delete .git directory at {}",
+            artifact_path.display()
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +204,40 @@ mod tests {
                 std::fs::remove_dir(&sample_cache).ok();
             }
         }
+    }
+
+    #[test]
+    fn test_validate_project_artifact_safe() {
+        let temp_proj = std::env::temp_dir().join("test_safe_proj");
+        let nm = temp_proj.join("node_modules");
+        std::fs::create_dir_all(&nm).unwrap();
+
+        let res = validate_project_artifact_for_cleaning(&nm, &temp_proj);
+        assert!(res.is_ok());
+
+        std::fs::remove_dir_all(&temp_proj).ok();
+    }
+
+    #[test]
+    fn test_validate_project_artifact_reject_root_itself() {
+        let temp_proj = std::env::temp_dir().join("test_proj_root_reject");
+        std::fs::create_dir_all(&temp_proj).unwrap();
+
+        let res = validate_project_artifact_for_cleaning(&temp_proj, &temp_proj);
+        assert!(res.is_err());
+
+        std::fs::remove_dir_all(&temp_proj).ok();
+    }
+
+    #[test]
+    fn test_validate_project_artifact_reject_unauthorized_folder() {
+        let temp_proj = std::env::temp_dir().join("test_proj_src_reject");
+        let src = temp_proj.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+
+        let res = validate_project_artifact_for_cleaning(&src, &temp_proj);
+        assert!(res.is_err());
+
+        std::fs::remove_dir_all(&temp_proj).ok();
     }
 }

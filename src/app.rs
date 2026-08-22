@@ -1,25 +1,34 @@
 use crate::cleaner::registry::CleanerRegistry;
 use crate::cleaner::traits::CleanResult;
 use crate::cli::{
-    CleanArgs, DashboardArgs, DockerArgs, DockerSubcommand, DoctorArgs, OutputFormat, ReportArgs,
-    ScanArgs,
+    BloatArgs, CleanArgs, DashboardArgs, DiffArgs, DockerArgs, DockerSubcommand, DoctorArgs,
+    OutputFormat, ProjectsArgs, ReportArgs, ScanArgs, SnapshotArgs, SnapshotSubcommand,
 };
 use crate::docker::{DockerClient, DockerInteractive};
+use crate::projects::{
+    clean_project_artifacts, prompt_confirm_clean, render_projects_table, scan_projects,
+    select_artifacts_interactive, ProjectType, ScannerOptions,
+};
 use crate::report::operation_log::{
     read_recent_operations, save_operation_log, ActionStatus, ActionType, OperationRecord,
 };
 use crate::safety::allowlist::CleanCategory;
+use crate::scanner::bloat::{format_bloat_table, run_full_bloat_analysis};
 use crate::scanner::disk_usage::{format_scanned_table, scan_directory_entries};
 use crate::scanner::large_files::{find_large_files, format_large_files_table};
+use crate::tracker::diff::{compare_snapshots, compare_with_live, format_diff_table};
+use crate::tracker::snapshot::{
+    create_snapshot, delete_all_snapshots, delete_snapshot, format_snapshots_table,
+    get_latest_snapshot, get_snapshots_dir, list_snapshots, load_snapshot,
+};
 use crate::tui::run_dashboard;
 use crate::utils::format::{format_bytes, format_duration, parse_size_to_bytes};
 use crate::utils::fs::{contract_tilde, expand_tilde};
 use crate::utils::platform::get_disk_stats;
+use crate::utils::table::create_styled_table;
 use anyhow::{Context, Result};
 use colored::*;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, Color, Row, Table};
+use comfy_table::{Cell, Color, Row};
 use dialoguer::Confirm;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
@@ -120,43 +129,62 @@ impl App {
             );
         }
 
-        let category_filter = match args.category.to_lowercase().as_str() {
-            "all" => None,
-            "user-cache" | "cache" => Some(CleanCategory::UserCache),
-            "user-logs" | "logs" => Some(CleanCategory::UserLogs),
-            "temp" | "temp-files" => Some(CleanCategory::TempFiles),
-            "xcode" | "xcode-derived-data" => Some(CleanCategory::XcodeDerivedData),
-            "archives" | "xcode-archives" => Some(CleanCategory::XcodeArchives),
-            "device-support" | "xcode-device-support" => Some(CleanCategory::XcodeDeviceSupport),
-            "brew" | "homebrew" => Some(CleanCategory::Homebrew),
-            "npm" => Some(CleanCategory::Npm),
-            "pip" => Some(CleanCategory::Pip),
-            "docker" => Some(CleanCategory::Docker),
-            "trash" => Some(CleanCategory::Trash),
-            other => {
-                anyhow::bail!(
-                    "Unknown category: '{}'. Valid categories: all, user-cache, user-logs, temp-files, xcode, brew, npm, pip, docker, trash",
-                    other
-                );
-            }
-        };
+        let dev_categories = vec![
+            CleanCategory::Homebrew,
+            CleanCategory::Npm,
+            CleanCategory::Pip,
+            CleanCategory::Gradle,
+            CleanCategory::Maven,
+            CleanCategory::Cargo,
+        ];
+        let xcode_categories = vec![
+            CleanCategory::XcodeDerivedData,
+            CleanCategory::XcodeArchives,
+            CleanCategory::XcodeDeviceSupport,
+        ];
+
+        let (category_filter, targets_user_cache): (Option<Vec<CleanCategory>>, bool) =
+            match args.category.to_lowercase().as_str() {
+                "all" => (None, true),
+                "user-cache" | "cache" => (Some(vec![CleanCategory::UserCache]), true),
+                "user-logs" | "logs" => (Some(vec![CleanCategory::UserLogs]), false),
+                "temp" | "temp-files" => (Some(vec![CleanCategory::TempFiles]), false),
+                "xcode" => (Some(xcode_categories), false),
+                "xcode-derived-data" => (Some(vec![CleanCategory::XcodeDerivedData]), false),
+                "archives" | "xcode-archives" => (Some(vec![CleanCategory::XcodeArchives]), false),
+                "device-support" | "xcode-device-support" => {
+                    (Some(vec![CleanCategory::XcodeDeviceSupport]), false)
+                }
+                "dev" | "dev-tools" | "developer" => (Some(dev_categories), false),
+                "brew" | "homebrew" => (Some(vec![CleanCategory::Homebrew]), false),
+                "npm" => (Some(vec![CleanCategory::Npm]), false),
+                "pip" => (Some(vec![CleanCategory::Pip]), false),
+                "gradle" => (Some(vec![CleanCategory::Gradle]), false),
+                "maven" => (Some(vec![CleanCategory::Maven]), false),
+                "cargo" => (Some(vec![CleanCategory::Cargo]), false),
+                "docker" => (Some(vec![CleanCategory::Docker]), false),
+                "trash" => (Some(vec![CleanCategory::Trash]), false),
+                other => {
+                    anyhow::bail!(
+                        "Unknown category: '{}'. Valid categories: all, dev, user-cache, user-logs, temp-files, xcode, brew, npm, pip, gradle, maven, cargo, docker, trash",
+                        other
+                    );
+                }
+            };
 
         // Scan selected targets
-        let mut scanned = self.registry.scan_all(category_filter);
+        let mut scanned = self.registry.scan_all(category_filter.as_deref());
         let mut total_reclaimable = 0u64;
         let mut total_items = 0usize;
 
-        let mut preview_table = Table::new();
-        preview_table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Category").fg(Color::Cyan),
-                Cell::new("Target Name").fg(Color::White),
-                Cell::new("Items Found").fg(Color::Yellow),
-                Cell::new("Reclaimable Size").fg(Color::Green),
-                Cell::new("Status").fg(Color::Magenta),
-            ]);
+        let mut preview_table = create_styled_table();
+        preview_table.set_header(vec![
+            Cell::new("Category").fg(Color::Cyan),
+            Cell::new("Target Name").fg(Color::White),
+            Cell::new("Items Found").fg(Color::Yellow),
+            Cell::new("Reclaimable Size").fg(Color::Green),
+            Cell::new("Status").fg(Color::Magenta),
+        ]);
 
         for (cleaner, scan_res) in &scanned {
             match scan_res {
@@ -192,8 +220,6 @@ impl App {
         }
 
         let running_browsers = crate::safety::browser::get_running_browsers();
-        let targets_user_cache =
-            category_filter.is_none() || category_filter == Some(CleanCategory::UserCache);
 
         if !running_browsers.is_empty() && targets_user_cache {
             let browser_names = running_browsers
@@ -466,16 +492,13 @@ impl App {
                 );
                 println!("Items:         {}", last_op.total_items_count);
 
-                let mut table = Table::new();
-                table
-                    .load_preset(UTF8_FULL)
-                    .apply_modifier(UTF8_ROUND_CORNERS)
-                    .set_header(vec![
-                        Cell::new("Item Path").fg(Color::Cyan),
-                        Cell::new("Size").fg(Color::Green),
-                        Cell::new("Action").fg(Color::Yellow),
-                        Cell::new("Status").fg(Color::Magenta),
-                    ]);
+                let mut table = create_styled_table();
+                table.set_header(vec![
+                    Cell::new("Item Path").fg(Color::Cyan),
+                    Cell::new("Size").fg(Color::Green),
+                    Cell::new("Action").fg(Color::Yellow),
+                    Cell::new("Status").fg(Color::Magenta),
+                ]);
 
                 for item in &last_op.items {
                     let status_str = match &item.status {
@@ -497,18 +520,15 @@ impl App {
             return Ok(());
         }
 
-        let mut table = Table::new();
-        table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Timestamp (UTC)").fg(Color::Cyan),
-                Cell::new("Command").fg(Color::White),
-                Cell::new("Category").fg(Color::Yellow),
-                Cell::new("Mode").fg(Color::Blue),
-                Cell::new("Freed Space").fg(Color::Green),
-                Cell::new("Items").fg(Color::Magenta),
-            ]);
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Timestamp (UTC)").fg(Color::Cyan),
+            Cell::new("Command").fg(Color::White),
+            Cell::new("Category").fg(Color::Yellow),
+            Cell::new("Mode").fg(Color::Blue),
+            Cell::new("Freed Space").fg(Color::Green),
+            Cell::new("Items").fg(Color::Magenta),
+        ]);
 
         for op in &operations {
             let mode = if op.dry_run {
@@ -543,17 +563,14 @@ impl App {
         // 1. Mounted Disks
         println!("{}", "💾 Mounted Disks & Storage:".bold());
         let disks = get_disk_stats();
-        let mut disk_table = Table::new();
-        disk_table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Disk Name").fg(Color::Cyan),
-                Cell::new("Mount Point").fg(Color::White),
-                Cell::new("Available Space").fg(Color::Green),
-                Cell::new("Used Space").fg(Color::Yellow),
-                Cell::new("Total Space").fg(Color::Magenta),
-            ]);
+        let mut disk_table = create_styled_table();
+        disk_table.set_header(vec![
+            Cell::new("Disk Name").fg(Color::Cyan),
+            Cell::new("Mount Point").fg(Color::White),
+            Cell::new("Available Space").fg(Color::Green),
+            Cell::new("Used Space").fg(Color::Yellow),
+            Cell::new("Total Space").fg(Color::Magenta),
+        ]);
 
         for d in &disks {
             disk_table.add_row(Row::from(vec![
@@ -576,14 +593,11 @@ impl App {
             ("Xcode Command Line Tools", "xcode-select"),
         ];
 
-        let mut tool_table = Table::new();
-        tool_table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Tool").fg(Color::Cyan),
-                Cell::new("Status").fg(Color::Green),
-            ]);
+        let mut tool_table = create_styled_table();
+        tool_table.set_header(vec![
+            Cell::new("Tool").fg(Color::Cyan),
+            Cell::new("Status").fg(Color::Green),
+        ]);
 
         for (name, cmd) in &tools {
             let available = std::process::Command::new("which")
@@ -709,6 +723,401 @@ impl App {
                     DockerInteractive::render_containers_table(&containers)
                 );
             }
+        }
+
+        Ok(())
+    }
+
+    /// Handle `projects` (and alias `sweep`) command
+    pub fn handle_projects(&self, args: ProjectsArgs) -> Result<()> {
+        let min_size_bytes = parse_size_to_bytes(&args.min_size)
+            .context("Failed to parse minimum artifact size threshold")?;
+
+        let project_type_filter = if args.project_type.to_lowercase() != "all" {
+            match ProjectType::from_str(&args.project_type) {
+                Some(pt) => Some(pt),
+                None => {
+                    anyhow::bail!(
+                        "Unknown project type: '{}'. Valid types: all, rust, node, python, gradle, composer, go, flutter",
+                        args.project_type
+                    );
+                }
+            }
+        } else {
+            None
+        };
+
+        let options = ScannerOptions {
+            base_path: args.path,
+            days_threshold: args.days,
+            project_type_filter,
+            min_size_bytes,
+            include_all: args.all,
+        };
+
+        println!("{}", "🔍 Scanning for software projects...".bold().cyan());
+        let projects = scan_projects(&options)?;
+
+        if args.format == OutputFormat::Json {
+            println!("{}", serde_json::to_string_pretty(&projects)?);
+            return Ok(());
+        }
+
+        if projects.is_empty() {
+            println!(
+                "{}",
+                "✨ No software projects with cleanable build artifacts found matching criteria."
+                    .green()
+            );
+            return Ok(());
+        }
+
+        println!("\n{}", render_projects_table(&projects));
+
+        // Interactive mode
+        if args.interactive {
+            let selected = select_artifacts_interactive(&projects)?;
+            if selected.is_empty() {
+                println!("{}", "No build artifacts selected for cleaning.".cyan());
+                return Ok(());
+            }
+
+            // Always request user confirmation before cleaning unless --yes was passed
+            if !args.yes {
+                let confirmed = prompt_confirm_clean(&selected, args.force)?;
+                if !confirmed {
+                    println!("{}", "Operation cancelled by user.".yellow());
+                    return Ok(());
+                }
+            }
+
+            let dry_run = !args.execute;
+            if dry_run {
+                println!(
+                    "{}",
+                    "ℹ️ DRY-RUN MODE: Simulating project artifact cleaning. Use --execute to apply changes."
+                        .bold()
+                        .yellow()
+                );
+            } else {
+                println!("{}", "🧹 Cleaning selected project artifacts...".cyan());
+            }
+
+            let result = clean_project_artifacts(&selected, dry_run, args.force)?;
+
+            if dry_run {
+                println!(
+                    "{}",
+                    format!(
+                        "✅ [DRY-RUN] Would reclaim {} across {} artifact(s).",
+                        format_bytes(result.total_bytes_freed).bold(),
+                        result.items_cleaned
+                    )
+                    .green()
+                );
+            } else {
+                println!(
+                    "{}",
+                    format!(
+                        "✅ Successfully cleaned {} artifact(s) and reclaimed {}!",
+                        result.items_cleaned,
+                        format_bytes(result.total_bytes_freed).bold()
+                    )
+                    .green()
+                );
+                if result.items_failed > 0 {
+                    println!(
+                        "{}",
+                        format!("⚠️ {} artifact(s) failed to clean.", result.items_failed).yellow()
+                    );
+                }
+            }
+
+            return Ok(());
+        }
+
+        // Non-interactive mode
+        if !args.execute {
+            println!(
+                "\n{}",
+                "💡 Tip: Run with `--interactive` (`-i`) to select and clean specific project folders,"
+                    .cyan()
+            );
+            println!(
+                "{}",
+                "   or add `--execute` to automatically clean all dormant project artifacts."
+                    .cyan()
+            );
+            return Ok(());
+        }
+
+        // Execute mode (without interactive flag) -> targets dormant projects (or all if --all)
+        let mut targets = Vec::new();
+        for p in &projects {
+            if args.all || p.is_dormant {
+                for a in &p.artifacts {
+                    targets.push((p, a));
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            println!(
+                "{}",
+                "No eligible dormant project artifacts found to clean.".yellow()
+            );
+            return Ok(());
+        }
+
+        // Always request user confirmation before cleaning unless --yes was passed
+        if !args.yes {
+            let confirmed = prompt_confirm_clean(&targets, args.force)?;
+            if !confirmed {
+                println!("{}", "Operation cancelled by user.".yellow());
+                return Ok(());
+            }
+        }
+
+        println!("{}", "🧹 Cleaning dormant project artifacts...".cyan());
+        let result = clean_project_artifacts(&targets, false, args.force)?;
+
+        println!(
+            "{}",
+            format!(
+                "✅ Successfully cleaned {} artifact(s) and reclaimed {}!",
+                result.items_cleaned,
+                format_bytes(result.total_bytes_freed).bold()
+            )
+            .green()
+        );
+        if result.items_failed > 0 {
+            println!(
+                "{}",
+                format!("⚠️ {} artifact(s) failed to clean.", result.items_failed).yellow()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Handle `bloat` / `phantom` command: analyze hidden/phantom disk space consumers
+    pub fn handle_bloat(&self, args: BloatArgs) -> Result<()> {
+        let min_bytes = parse_size_to_bytes(&args.min_size)
+            .context("Failed to parse minimum size threshold")?;
+
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                .template("{spinner:.cyan} {msg}")?,
+        );
+        spinner.set_message("Analyzing phantom disk space consumption across macOS subsystems...");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+        let report = run_full_bloat_analysis(args.system)?;
+        spinner.finish_and_clear();
+
+        if args.format == OutputFormat::Json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!(
+                "{}",
+                "🔬 macOS Phantom Disk Space Bloat Analysis\n"
+                    .bold()
+                    .cyan()
+            );
+            println!("{}", format_bloat_table(&report, min_bytes, args.detailed));
+        }
+
+        Ok(())
+    }
+
+    /// Handle `snapshot` command: create, list, and delete disk space snapshots
+    pub fn handle_snapshot(&self, args: SnapshotArgs) -> Result<()> {
+        match args.action {
+            None => {
+                // Default: create snapshot
+                self.create_snapshot_interactive(args.path, args.name, args.depth)?;
+            }
+            Some(SnapshotSubcommand::Create(create_args)) => {
+                let target_path = create_args.path.or(args.path);
+                let label = create_args.name.or(args.name);
+                let depth = if create_args.depth != 3 {
+                    create_args.depth
+                } else {
+                    args.depth
+                };
+                self.create_snapshot_interactive(target_path, label, depth)?;
+            }
+            Some(SnapshotSubcommand::List) => {
+                let snapshots = list_snapshots()?;
+                println!("{}", format_snapshots_table(&snapshots));
+            }
+            Some(SnapshotSubcommand::Delete(delete_args)) => {
+                if delete_args.all {
+                    let count = delete_all_snapshots()?;
+                    println!("{}", format!("🗑️ Deleted {} snapshot(s).", count).green());
+                } else if let Some(id) = delete_args.id {
+                    let success = delete_snapshot(&id)?;
+                    if success {
+                        println!("{}", format!("🗑️ Deleted snapshot '{}'.", id).green());
+                    } else {
+                        println!("{}", format!("Snapshot '{}' not found.", id).yellow());
+                    }
+                } else {
+                    println!(
+                        "{}",
+                        "Please specify snapshot ID to delete or use `--all`.".yellow()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn create_snapshot_interactive(
+        &self,
+        path: Option<PathBuf>,
+        name: Option<String>,
+        depth: usize,
+    ) -> Result<()> {
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                .template("{spinner:.cyan} {msg}")?,
+        );
+        spinner.set_message("Scanning filesystem tree and capturing disk snapshot...");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+        let snapshot = create_snapshot(path, name, depth, true)?;
+        spinner.finish_and_clear();
+
+        let dir = get_snapshots_dir();
+        let file_path = dir.join(format!("{}.json", snapshot.id));
+
+        println!(
+            "{}",
+            "📸 Disk Snapshot Captured Successfully!".bold().green()
+        );
+        println!("--------------------------------------------------");
+        println!("🆔 Snapshot ID:       {}", snapshot.id.bold().cyan());
+        if let Some(ref lbl) = snapshot.name {
+            println!("🏷️  Label:             {}", lbl.bold().yellow());
+        }
+        println!(
+            "⏱️  Timestamp:         {}",
+            snapshot.timestamp.format("%Y-%m-%d %H:%M:%S")
+        );
+        println!("📂 Root Target:       {}", snapshot.root_path);
+        println!("📊 Items Captured:    {}", snapshot.items.len());
+        println!(
+            "💾 Total Size:        {}",
+            format_bytes(snapshot.total_size_bytes).green()
+        );
+        if let Some(ref disk) = snapshot.disk_stats {
+            println!(
+                "💽 Available Disk:    {}",
+                format_bytes(disk.available_bytes).green()
+            );
+        }
+        println!(
+            "📁 Saved File:        {}",
+            file_path.display().to_string().dimmed()
+        );
+        println!("--------------------------------------------------");
+        println!(
+            "\n💡 Tip: Run `{}` later to see what space has grown since this snapshot.",
+            "cli-ner diff".cyan()
+        );
+
+        Ok(())
+    }
+
+    /// Handle `diff` command: compare two snapshots or compare latest snapshot with live state
+    pub fn handle_diff(&self, args: DiffArgs) -> Result<()> {
+        let min_delta_bytes = parse_size_to_bytes(&args.min_delta)
+            .context("Failed to parse minimum delta threshold")?;
+
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                .template("{spinner:.cyan} {msg}")?,
+        );
+
+        let report = match (args.base, args.target) {
+            (Some(base_id), Some(target_id)) => {
+                // Compare two specific saved snapshots
+                spinner.set_message(format!(
+                    "Loading snapshots {} and {}...",
+                    base_id, target_id
+                ));
+                spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+                let base_snap = load_snapshot(&base_id)?;
+                let target_snap = load_snapshot(&target_id)?;
+                compare_snapshots(&base_snap, &target_snap)
+            }
+            (Some(base_id), None) => {
+                // Compare specific base snapshot against live current state
+                spinner.set_message(format!(
+                    "Comparing snapshot {} against current live filesystem state...",
+                    base_id
+                ));
+                spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+                let base_snap = load_snapshot(&base_id)?;
+                compare_with_live(&base_snap, args.depth)?
+            }
+            (None, None) => {
+                // Compare latest saved snapshot with live state
+                let latest = get_latest_snapshot()?;
+                match latest {
+                    Some(latest_snap) => {
+                        spinner.set_message(
+                            "Comparing latest saved snapshot against current live state...",
+                        );
+                        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+                        compare_with_live(&latest_snap, args.depth)?
+                    }
+                    None => {
+                        spinner.finish_and_clear();
+                        println!(
+                            "{}",
+                            "ℹ️ No previous disk snapshot found. Taking an initial baseline snapshot now...".yellow()
+                        );
+                        let initial =
+                            create_snapshot(None, Some("baseline".into()), args.depth, true)?;
+                        println!(
+                            "{}",
+                            format!(
+                                "✅ Baseline snapshot '{}' created. Run `cli-ner diff` again later to see what space has grown.",
+                                initial.id
+                            )
+                            .green()
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            (None, Some(_)) => unreachable!(),
+        };
+
+        spinner.finish_and_clear();
+
+        if args.format == OutputFormat::Json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("{}", format_diff_table(&report, args.top, min_delta_bytes));
+        }
+
+        if args.save {
+            let snap = create_snapshot(None, None, args.depth, true)?;
+            println!(
+                "\n{}",
+                format!("📸 Saved new current snapshot as '{}'.", snap.id).green()
+            );
         }
 
         Ok(())

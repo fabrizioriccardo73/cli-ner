@@ -87,6 +87,10 @@ cargo install --path .
   - **Python**: `pip` cache (`~/Library/Caches/pip`)
   - **Docker**: Accurate space detection via `docker system df`, container data loss warnings, build cache, dangling images, and stopped containers.
   - **Xcode**: DerivedData, Archives, iOS DeviceSupport (with process checks to ensure Xcode is not running).
+- 📦 **Universal "Project Sweep" & Dormant Project Artifacts**:
+  - Automatic detection of software projects across your machine (Rust, Node.js, Python, Gradle, Composer, Go, Flutter).
+  - Inactivity and dormancy calculation (via Git commits / source file timestamps, e.g. 60+ days).
+  - Interactive multi-select UI to selectively clean `node_modules`, `target/`, `.venv`, `.gradle/`, `vendor/`, `.dart_tool/`, etc. with mandatory confirmation.
 - 📝 **Immutable Audit Trail & Logging**:
   - Every scan and clean operation is logged to `~/.cli-ner/logs/` in JSON Lines format with timestamps, freed bytes, processed item lists, and errors.
 - 🖥️ **Interactive Terminal UI (TUI) Dashboard**:
@@ -94,6 +98,9 @@ cargo install --path .
 - 🔍 **Disk Analyzer & Large Files Finder**:
   - Directory space usage mapping with percentage breakdown.
   - Recursive search for large files exceeding a customizable threshold (e.g., `--min-size 500MB`).
+- 🔬 **Phantom Disk Space Bloat Analyzer (`cli-ner bloat` / `cli-ner phantom`)**:
+  - Uncovers hidden causes behind "vanishing" disk space on macOS: Time Machine local snapshots, sleep image (`/var/vm/sleepimage`), Docker VM disks, iOS simulator runtimes, CloudStorage provider caches, browser profiles, and ASL/system logs.
+  - Categorizes severity with actionable recovery hints and commands.
 
 ---
 
@@ -103,19 +110,23 @@ cargo install --path .
    ```bash
    cli-ner doctor
    ```
-2. **Interactive Docker Inspection & Safe Cleanup**:
+2. **Diagnose "Invisible" Phantom Disk Space**:
+   ```bash
+   cli-ner bloat
+   ```
+3. **Interactive Docker Inspection & Safe Cleanup**:
    ```bash
    cli-ner docker
    ```
-3. **Simulate Cache & Developer Cleanup (Dry-Run)**:
+4. **Simulate Cache & Developer Cleanup (Dry-Run)**:
    ```bash
    cli-ner clean
    ```
-4. **Execute Safe Cleanup (Moves files to macOS Trash)**:
+5. **Execute Safe Cleanup (Moves files to macOS Trash)**:
    ```bash
    cli-ner clean --execute
    ```
-5. **Explore History & Metrics (TUI Dashboard)**:
+6. **Explore History & Metrics (TUI Dashboard)**:
    ```bash
    cli-ner dashboard
    ```
@@ -218,7 +229,46 @@ cli-ner docker status
 - 🔒 **In-Use Images**: Cross-referenced with active containers and protected from deletion.
 - ⚠️ **Volumes & Persistent Data**: Volumes are **NEVER** deleted in standard cleanups. Container mounts (databases, bind-mounts) are clearly displayed before any stopped container removal.
 
-### 6. `cli-ner doctor` — System Diagnostics & Environment Check
+### 6. `cli-ner projects` (or `cli-ner sweep`) — Dormant Project Sweep & Build Artifacts Cleaner
+
+Universal project scanner (like an all-ecosystem `npkill`) that detects software projects on your disk, calculates inactivity based on Git commits/source files, and safely cleans heavy build artifacts:
+
+```bash
+# Preview dormant projects (inactivity >= 60 days) in common dev folders or cwd
+cli-ner projects
+
+# Interactive selection mode with checkbox list
+cli-ner projects --interactive
+# or shortcut:
+cli-ner projects -i
+
+# Scan a specific directory and filter by days of inactivity (e.g. >= 30 days)
+cli-ner projects --path ~/development --days 30
+
+# Filter by software ecosystem (node, rust, python, gradle, composer, go, flutter)
+cli-ner projects --type node
+cli-ner projects --type rust
+
+# Include all projects (even active ones) with a minimum size threshold
+cli-ner projects --all --min-size 100MB
+
+# Execute cleaning of dormant project artifacts (moves to macOS Trash with confirmation)
+cli-ner projects --execute
+
+# Permanent deletion (requires explicit confirmation)
+cli-ner projects --execute --force
+```
+
+**Supported Ecosystems & Build Artifacts**:
+- 🦀 **Rust**: `target/`
+- 🟢 **Node.js**: `node_modules/`, `.next/`, `.nuxt/`, `.turbo/`
+- 🐍 **Python**: `.venv/`, `venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`
+- ☕ **Java / Kotlin**: `.gradle/`, `build/`, `target/` (Maven)
+- 🐘 **PHP / Composer**: `vendor/`
+- 🐹 **Go**: `vendor/`
+- 💙 **Flutter / Dart**: `.dart_tool/`, `build/`
+
+### 7. `cli-ner doctor` — System Diagnostics & Environment Check
 
 ```bash
 cli-ner doctor
@@ -227,6 +277,81 @@ Checks:
 - Available and total space across all mounted disks.
 - Availability of external tools (Homebrew, npm, pip, Docker, Xcode).
 - Status of security protections, permissions, and paths.
+
+### 8. `cli-ner bloat` (or `cli-ner phantom`) — Phantom Disk Space Analyzer
+
+Diagnose where 20-50+ GB of "invisible" disk space has disappeared on macOS:
+
+```bash
+# Analyze all phantom bloat sources on your Mac
+cli-ner bloat
+
+# Or use the shortcut alias:
+cli-ner phantom
+
+# Show detailed filesystem paths, file counts, and diagnostic hints
+cli-ner bloat --detailed
+
+# Filter by minimum size threshold (e.g., >= 500MB or >= 1GB)
+cli-ner bloat --min-size 500MB
+
+# Structured JSON output
+cli-ner bloat --format json
+```
+
+**What it detects**:
+- 🕐 **Time Machine Local Snapshots**: APFS snapshots locking freed blocks.
+- 💤 **Sleep Image & Swap**: `/var/vm/sleepimage` (RAM dump) and swapfiles.
+- ☁️ **Cloud Storage Caches**: `~/Library/CloudStorage` (OneDrive, Google Drive, Dropbox cached offline copies) and iCloud Mobile Documents.
+- 🐳 **Docker & Container VM Disks**: `Docker.raw` / OrbStack data.
+- 🔨 **Xcode & Simulators**: DerivedData, DeviceSupport, and iOS Simulator disk runtimes (`xcrun simctl`).
+- 🌐 **Browser Storage**: Chrome, Edge, Safari, Arc, Brave profile data & caches.
+- 📋 **System & ASL Logs**: `/var/log`, `/Library/Logs`, `~/Library/Logs`.
+- 📦 **Dev Package Caches**: Homebrew, Gradle, Maven, npm, pnpm, pip, CocoaPods, Cargo caches.
+
+---
+
+### 9. `cli-ner snapshot` — Point-in-Time Disk Space Snapshots
+
+Take snapshots of your disk usage state to track how disk consumption evolves over time:
+
+```bash
+# Capture a new disk snapshot of your home directory
+cli-ner snapshot create
+
+# Or create a snapshot with a descriptive label
+cli-ner snapshot create --name "before-xcode-build"
+
+# List all saved historical snapshots
+cli-ner snapshot list
+
+# Delete a specific snapshot or delete all
+cli-ner snapshot delete <SNAPSHOT_ID>
+cli-ner snapshot delete --all
+```
+
+---
+
+### 10. `cli-ner diff` (or `cli-ner compare`) — Time-Travel Disk Growth Tracking
+
+Track **what consumed space** between yesterday and today. Compares current live disk usage against previous snapshots to pinpoint which directories or files grew:
+
+```bash
+# Compare current live state with the most recent saved snapshot
+cli-ner diff
+
+# Compare two specific historical snapshots
+cli-ner diff <SNAPSHOT_ID_1> <SNAPSHOT_ID_2>
+
+# Filter to show only top growers and custom delta threshold
+cli-ner diff --top 10 --min-delta 50MB
+
+# Save a new snapshot after calculating diff
+cli-ner diff --save
+
+# Output structured JSON for automation or scripting
+cli-ner diff --format json
+```
 
 ---
 

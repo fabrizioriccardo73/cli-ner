@@ -1,11 +1,10 @@
 use crate::docker::client::DockerClient;
 use crate::docker::models::{DockerContainer, DockerImage, DockerSystemDf, DockerVolume};
 use crate::utils::format::format_bytes;
+use crate::utils::table::create_styled_table;
 use anyhow::Result;
 use colored::*;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, Color, Row, Table};
+use comfy_table::{Cell, Color, Row};
 use dialoguer::{Confirm, MultiSelect, Select};
 
 pub struct DockerInteractive;
@@ -13,17 +12,14 @@ pub struct DockerInteractive;
 impl DockerInteractive {
     /// Renders a formatted Docker system disk usage summary table
     pub fn render_df_table(df: &DockerSystemDf) -> String {
-        let mut table = Table::new();
-        table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Docker Component").fg(Color::Cyan),
-                Cell::new("Total Count").fg(Color::White),
-                Cell::new("Active / In-Use").fg(Color::Green),
-                Cell::new("Total Size").fg(Color::Yellow),
-                Cell::new("Reclaimable Size").fg(Color::Magenta),
-            ]);
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Docker Component").fg(Color::Cyan),
+            Cell::new("Total Count").fg(Color::White),
+            Cell::new("Active / In-Use").fg(Color::Green),
+            Cell::new("Total Size").fg(Color::Yellow),
+            Cell::new("Reclaimable Size").fg(Color::Magenta),
+        ]);
 
         table.add_row(Row::from(vec![
             Cell::new("🖼️  Images (Layers & Tags)").fg(Color::Cyan),
@@ -77,18 +73,15 @@ impl DockerInteractive {
             return "No Docker containers found on system.".dimmed().to_string();
         }
 
-        let mut table = Table::new();
-        table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Container ID").fg(Color::Cyan),
-                Cell::new("Name").fg(Color::White),
-                Cell::new("Image").fg(Color::Yellow),
-                Cell::new("State / Status").fg(Color::Green),
-                Cell::new("Size (RW)").fg(Color::Magenta),
-                Cell::new("Mounted Volumes & Data").fg(Color::DarkYellow),
-            ]);
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Container ID").fg(Color::Cyan),
+            Cell::new("Name").fg(Color::White),
+            Cell::new("Image").fg(Color::Yellow),
+            Cell::new("State / Status").fg(Color::Green),
+            Cell::new("Size (RW)").fg(Color::Magenta),
+            Cell::new("Mounted Volumes & Data").fg(Color::DarkYellow),
+        ]);
 
         for c in containers {
             let short_id = if c.id.len() >= 12 { &c.id[..12] } else { &c.id };
@@ -139,17 +132,14 @@ impl DockerInteractive {
             return "No Docker images found on system.".dimmed().to_string();
         }
 
-        let mut table = Table::new();
-        table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Image ID").fg(Color::Cyan),
-                Cell::new("Repository:Tag").fg(Color::White),
-                Cell::new("Size").fg(Color::Green),
-                Cell::new("Created").fg(Color::Yellow),
-                Cell::new("Safety / Usage Status").fg(Color::Magenta),
-            ]);
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Image ID").fg(Color::Cyan),
+            Cell::new("Repository:Tag").fg(Color::White),
+            Cell::new("Size").fg(Color::Green),
+            Cell::new("Created").fg(Color::Yellow),
+            Cell::new("Safety / Usage Status").fg(Color::Magenta),
+        ]);
 
         for img in images {
             let short_id = if img.id.len() >= 12 {
@@ -187,17 +177,14 @@ impl DockerInteractive {
                 .to_string();
         }
 
-        let mut table = Table::new();
-        table
-            .load_preset(UTF8_FULL)
-            .apply_modifier(UTF8_ROUND_CORNERS)
-            .set_header(vec![
-                Cell::new("Volume Name").fg(Color::Cyan),
-                Cell::new("Driver").fg(Color::White),
-                Cell::new("Status").fg(Color::Yellow),
-                Cell::new("Attached Container").fg(Color::Green),
-                Cell::new("Data Safety Risk").fg(Color::Red),
-            ]);
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Volume Name").fg(Color::Cyan),
+            Cell::new("Driver").fg(Color::White),
+            Cell::new("Status").fg(Color::Yellow),
+            Cell::new("Attached Container").fg(Color::Green),
+            Cell::new("Data Safety Risk").fg(Color::Red),
+        ]);
 
         for v in volumes {
             let in_use = v.is_in_use();
@@ -230,6 +217,7 @@ impl DockerInteractive {
 
         table.to_string()
     }
+
 
     /// Main interactive Docker dashboard and management menu
     pub fn run_interactive_menu() -> Result<()> {

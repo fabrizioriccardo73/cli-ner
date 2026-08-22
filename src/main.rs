@@ -2,9 +2,11 @@ mod app;
 mod cleaner;
 mod cli;
 mod docker;
+mod projects;
 mod report;
 mod safety;
 mod scanner;
+mod tracker;
 mod tui;
 mod utils;
 
@@ -34,6 +36,10 @@ fn main() -> Result<()> {
         Commands::Dashboard(args) => app.handle_dashboard(args)?,
         Commands::Doctor(args) => app.handle_doctor(args)?,
         Commands::Docker(args) => app.handle_docker(args)?,
+        Commands::Projects(args) => app.handle_projects(args)?,
+        Commands::Bloat(args) => app.handle_bloat(args)?,
+        Commands::Snapshot(args) => app.handle_snapshot(args)?,
+        Commands::Diff(args) => app.handle_diff(args)?,
     }
 
     Ok(())

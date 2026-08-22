@@ -29,6 +29,7 @@ pub enum Commands {
     Report(ReportArgs),
 
     /// 🖥️ Interactive Terminal UI (TUI) Dashboard for logs & audit analytics
+    #[command(alias = "tui")]
     Dashboard(DashboardArgs),
 
     /// 🩺 Run system diagnostics, permissions check, and tool availability
@@ -36,6 +37,21 @@ pub enum Commands {
 
     /// 🐳 Safe interactive Docker manager & cleanup wizard
     Docker(DockerArgs),
+
+    /// 📦 Scan and safely clean dormant software project build artifacts (node_modules, target, .venv, etc.)
+    #[command(alias = "sweep")]
+    Projects(ProjectsArgs),
+
+    /// 🔬 Analyze phantom disk space bloat (Time Machine snapshots, sleep image, Docker disk, caches)
+    #[command(alias = "phantom")]
+    Bloat(BloatArgs),
+
+    /// 📸 Take, list, and manage point-in-time disk space snapshots
+    Snapshot(SnapshotArgs),
+
+    /// 📊 Compare disk usage between snapshots or live state to track what consumed space
+    #[command(alias = "compare")]
+    Diff(DiffArgs),
 }
 
 #[derive(Args, Debug)]
@@ -170,4 +186,150 @@ pub struct DockerImagesArgs {
     /// Automatically prune dangling (<none>:<none>) images
     #[arg(short, long)]
     pub dangling: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ProjectsArgs {
+    /// Target directory or workspace root to scan for projects (defaults to common dev directories or cwd)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Days of inactivity threshold to consider a project dormant
+    #[arg(short, long, default_value_t = 60)]
+    pub days: u64,
+
+    /// Filter by project ecosystem (all, node, rust, python, gradle, composer, go, flutter)
+    #[arg(short = 't', long = "type", default_value = "all")]
+    pub project_type: String,
+
+    /// Minimum total build artifact size per project to include (e.g. 10MB, 100MB)
+    #[arg(short = 'm', long, default_value = "0MB")]
+    pub min_size: String,
+
+    /// Include all projects including active ones (do not filter only dormant)
+    #[arg(short, long)]
+    pub all: bool,
+
+    /// Interactive checklist selection mode
+    #[arg(short, long)]
+    pub interactive: bool,
+
+    /// Execute cleaning of dormant project artifacts (default is preview/dry-run)
+    #[arg(long)]
+    pub execute: bool,
+
+    /// Permanently delete files instead of moving to macOS Trash (requires confirmation)
+    #[arg(long)]
+    pub force: bool,
+
+    /// Non-interactive mode (proceed without confirmation prompt when --execute is passed)
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
+
+    /// Output format
+    #[arg(long, default_value = "table")]
+    pub format: OutputFormat,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct BloatArgs {
+    /// Minimum size threshold to display a bloat source (e.g. 50MB, 500MB, 1GB)
+    #[arg(short = 'm', long, default_value = "50MB")]
+    pub min_size: String,
+
+    /// Show detailed filesystem paths, file counts, and extended diagnostic hints
+    #[arg(short = 'd', long)]
+    pub detailed: bool,
+
+    /// Also scan system directories requiring elevated privileges
+    #[arg(long)]
+    pub system: bool,
+
+    /// Output format
+    #[arg(long, default_value = "table")]
+    pub format: OutputFormat,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SnapshotArgs {
+    #[command(subcommand)]
+    pub action: Option<SnapshotSubcommand>,
+
+    /// Target path to scan (defaults to user home directory)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Optional label or name for the snapshot (e.g. "before-build", "monday-morning")
+    #[arg(short, long)]
+    pub name: Option<String>,
+
+    /// Max scan tree depth (default: 2)
+    #[arg(long, default_value_t = 2)]
+    pub depth: usize,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SnapshotSubcommand {
+    /// 📸 Take and save a new disk snapshot
+    Create(SnapshotCreateArgs),
+
+    /// 📋 List all saved disk snapshots
+    List,
+
+    /// 🗑️ Delete a specific snapshot by ID/name or delete all
+    Delete(SnapshotDeleteArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct SnapshotCreateArgs {
+    /// Optional label or name for the snapshot (e.g. "before-build", "monday-morning")
+    #[arg(short, long)]
+    pub name: Option<String>,
+
+    /// Target path to scan (defaults to user home directory)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Max scan tree depth (default: 2)
+    #[arg(long, default_value_t = 2)]
+    pub depth: usize,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct SnapshotDeleteArgs {
+    /// ID or label of the snapshot to delete (or use --all)
+    pub id: Option<String>,
+
+    /// Delete all saved snapshots
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DiffArgs {
+    /// First snapshot ID or name (older base). If not provided, compares live state against the latest snapshot.
+    pub base: Option<String>,
+
+    /// Second snapshot ID or name (newer target). If omitted and base is provided, compares base against live state.
+    pub target: Option<String>,
+
+    /// Number of top growing directories/files to display
+    #[arg(short = 'n', long, default_value_t = 15)]
+    pub top: usize,
+
+    /// Minimum growth/reduction delta threshold to display (e.g. 10MB, 100MB, 1GB)
+    #[arg(short = 'm', long, default_value = "10MB")]
+    pub min_delta: String,
+
+    /// Max scan tree depth for live comparison (default: 2)
+    #[arg(long, default_value_t = 2)]
+    pub depth: usize,
+
+    /// Save a new snapshot of the current state after calculating diff
+    #[arg(short, long)]
+    pub save: bool,
+
+    /// Output format
+    #[arg(long, default_value = "table")]
+    pub format: OutputFormat,
 }

@@ -522,3 +522,120 @@ impl Cleaner for DockerCleaner {
         Ok(result)
     }
 }
+
+pub struct GradleCacheCleaner;
+
+impl Cleaner for GradleCacheCleaner {
+    fn name(&self) -> &'static str {
+        "Gradle Dependency Cache"
+    }
+
+    fn category(&self) -> CleanCategory {
+        CleanCategory::Gradle
+    }
+
+    fn description(&self) -> &'static str {
+        "Cleans cached Gradle downloaded dependencies in ~/.gradle/caches"
+    }
+
+    fn scan(&self) -> Result<Vec<CleanTargetItem>> {
+        let gradle_cache = expand_tilde("~/.gradle/caches");
+        let mut items = Vec::new();
+        if gradle_cache.is_dir() {
+            for entry in std::fs::read_dir(&gradle_cache)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Gradle cache {}", name),
+                        });
+                    }
+                }
+            }
+        }
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
+        Ok(items)
+    }
+}
+
+pub struct MavenCacheCleaner;
+
+impl Cleaner for MavenCacheCleaner {
+    fn name(&self) -> &'static str {
+        "Maven Repository Cache"
+    }
+
+    fn category(&self) -> CleanCategory {
+        CleanCategory::Maven
+    }
+
+    fn description(&self) -> &'static str {
+        "Cleans cached Maven repository artifacts in ~/.m2/repository"
+    }
+
+    fn scan(&self) -> Result<Vec<CleanTargetItem>> {
+        let m2_repo = expand_tilde("~/.m2/repository");
+        let mut items = Vec::new();
+        if m2_repo.is_dir() {
+            for entry in std::fs::read_dir(&m2_repo)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Maven repository group {}", name),
+                        });
+                    }
+                }
+            }
+        }
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
+        Ok(items)
+    }
+}
+
+pub struct CargoCacheCleaner;
+
+impl Cleaner for CargoCacheCleaner {
+    fn name(&self) -> &'static str {
+        "Cargo Package Cache"
+    }
+
+    fn category(&self) -> CleanCategory {
+        CleanCategory::Cargo
+    }
+
+    fn description(&self) -> &'static str {
+        "Cleans Cargo downloaded registry package cache in ~/.cargo/registry/cache"
+    }
+
+    fn scan(&self) -> Result<Vec<CleanTargetItem>> {
+        let cargo_cache = expand_tilde("~/.cargo/registry/cache");
+        let mut items = Vec::new();
+        if cargo_cache.is_dir() {
+            for entry in std::fs::read_dir(&cargo_cache)?.flatten() {
+                let path = entry.path();
+                if let Ok((size, count)) = calculate_size(&path) {
+                    if size > 0 {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        items.push(CleanTargetItem {
+                            path,
+                            size_bytes: size,
+                            file_count: count,
+                            description: format!("Cargo registry cache {}", name),
+                        });
+                    }
+                }
+            }
+        }
+        items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
+        Ok(items)
+    }
+}

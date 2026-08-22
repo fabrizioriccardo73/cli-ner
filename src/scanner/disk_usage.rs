@@ -1,9 +1,8 @@
 use crate::utils::format::format_bytes;
-use crate::utils::fs::calculate_size;
+use crate::utils::fs::{calculate_size, contract_tilde};
+use crate::utils::table::{create_styled_table_with_width, get_terminal_width};
 use anyhow::Result;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, Color, Row, Table};
+use comfy_table::{Cell, Color, Row};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,17 +49,35 @@ pub fn format_scanned_table(
     entries: &[ScannedDirectory],
     total_size: u64,
 ) -> String {
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_header(vec![
+    format_scanned_table_with_width(target_path, entries, total_size, get_terminal_width())
+}
+
+/// Print formatted table of scanned directory entries with explicit width
+pub fn format_scanned_table_with_width(
+    target_path: &Path,
+    entries: &[ScannedDirectory],
+    total_size: u64,
+    width: u16,
+) -> String {
+    let mut table = create_styled_table_with_width(width);
+    let is_compact = width < 85;
+
+    if is_compact {
+        table.set_header(vec![
+            Cell::new("Item Name").fg(Color::Cyan),
+            Cell::new("Size").fg(Color::Green),
+            Cell::new("Files").fg(Color::Yellow),
+            Cell::new("Share").fg(Color::Magenta),
+        ]);
+    } else {
+        table.set_header(vec![
             Cell::new("Item Name").fg(Color::Cyan),
             Cell::new("Size").fg(Color::Green),
             Cell::new("Files").fg(Color::Yellow),
             Cell::new("Share").fg(Color::Magenta),
             Cell::new("Path").fg(Color::DarkGrey),
         ]);
+    }
 
     for entry in entries {
         let name = entry
@@ -75,19 +92,29 @@ pub fn format_scanned_table(
             0.0
         };
 
-        table.add_row(Row::from(vec![
-            Cell::new(name),
-            Cell::new(format_bytes(entry.size_bytes)).fg(Color::Green),
-            Cell::new(entry.file_count.to_string()),
-            Cell::new(format!("{:.1}%", percentage)),
-            Cell::new(entry.path.display().to_string()).fg(Color::DarkGrey),
-        ]));
+        if is_compact {
+            table.add_row(Row::from(vec![
+                Cell::new(name),
+                Cell::new(format_bytes(entry.size_bytes)).fg(Color::Green),
+                Cell::new(entry.file_count.to_string()),
+                Cell::new(format!("{:.1}%", percentage)),
+            ]));
+        } else {
+            table.add_row(Row::from(vec![
+                Cell::new(name),
+                Cell::new(format_bytes(entry.size_bytes)).fg(Color::Green),
+                Cell::new(entry.file_count.to_string()),
+                Cell::new(format!("{:.1}%", percentage)),
+                Cell::new(contract_tilde(&entry.path)).fg(Color::DarkGrey),
+            ]));
+        }
     }
 
     format!(
         "📂 Scanned Target: {}\nTotal Size: {}\n\n{}",
-        target_path.display(),
+        contract_tilde(target_path),
         format_bytes(total_size),
         table
     )
 }
+

@@ -1,4 +1,7 @@
-use crate::cleaner::dev_tools::{DockerCleaner, HomebrewCleaner, NpmCacheCleaner, PipCacheCleaner};
+use crate::cleaner::dev_tools::{
+    CargoCacheCleaner, DockerCleaner, GradleCacheCleaner, HomebrewCleaner, MavenCacheCleaner,
+    NpmCacheCleaner, PipCacheCleaner,
+};
 use crate::cleaner::system_cache::UserCacheCleaner;
 use crate::cleaner::system_logs::UserLogsCleaner;
 use crate::cleaner::temp_files::TempFilesCleaner;
@@ -27,6 +30,9 @@ impl CleanerRegistry {
             Box::new(HomebrewCleaner),
             Box::new(NpmCacheCleaner),
             Box::new(PipCacheCleaner),
+            Box::new(GradleCacheCleaner),
+            Box::new(MavenCacheCleaner),
+            Box::new(CargoCacheCleaner),
             Box::new(DockerCleaner),
             Box::new(TrashCleaner),
         ];
@@ -49,13 +55,13 @@ impl CleanerRegistry {
     #[allow(clippy::borrowed_box, clippy::type_complexity)]
     pub fn scan_all(
         &self,
-        category_filter: Option<CleanCategory>,
+        category_filter: Option<&[CleanCategory]>,
     ) -> Vec<(&Box<dyn Cleaner>, Result<Vec<CleanTargetItem>>)> {
         self.cleaners
             .iter()
             .filter(|c| {
-                if let Some(cat) = category_filter {
-                    c.category() == cat
+                if let Some(cats) = category_filter {
+                    cats.contains(&c.category())
                 } else {
                     true
                 }

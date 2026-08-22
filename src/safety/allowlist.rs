@@ -13,6 +13,9 @@ pub enum CleanCategory {
     Homebrew,
     Npm,
     Pip,
+    Gradle,
+    Maven,
+    Cargo,
     Docker,
     Trash,
 }
@@ -30,6 +33,9 @@ impl CleanCategory {
             CleanCategory::Homebrew => "Homebrew Cache & Unused Packages",
             CleanCategory::Npm => "NPM Cache",
             CleanCategory::Pip => "PIP Cache",
+            CleanCategory::Gradle => "Gradle Dependency Cache",
+            CleanCategory::Maven => "Maven Repository Cache",
+            CleanCategory::Cargo => "Cargo Package Cache",
             CleanCategory::Docker => "Docker Unused Containers & Images",
             CleanCategory::Trash => "macOS Trash",
         }
@@ -46,6 +52,9 @@ impl CleanCategory {
             CleanCategory::Homebrew => "homebrew",
             CleanCategory::Npm => "npm",
             CleanCategory::Pip => "pip",
+            CleanCategory::Gradle => "gradle",
+            CleanCategory::Maven => "maven",
+            CleanCategory::Cargo => "cargo",
             CleanCategory::Docker => "docker",
             CleanCategory::Trash => "trash",
         }
@@ -121,6 +130,21 @@ pub const ALLOWED_TARGETS: &[AllowedTarget] = &[
     AllowedTarget {
         category: CleanCategory::Pip,
         path_pattern: "~/Library/Caches/pip",
+        contents_only: true,
+    },
+    AllowedTarget {
+        category: CleanCategory::Gradle,
+        path_pattern: "~/.gradle/caches",
+        contents_only: true,
+    },
+    AllowedTarget {
+        category: CleanCategory::Maven,
+        path_pattern: "~/.m2/repository",
+        contents_only: true,
+    },
+    AllowedTarget {
+        category: CleanCategory::Cargo,
+        path_pattern: "~/.cargo/registry/cache",
         contents_only: true,
     },
 ];

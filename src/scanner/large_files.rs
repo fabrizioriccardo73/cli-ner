@@ -1,8 +1,8 @@
 use crate::utils::format::format_bytes;
+use crate::utils::fs::contract_tilde;
+use crate::utils::table::{create_styled_table_with_width, get_terminal_width};
 use anyhow::Result;
-use comfy_table::modifiers::UTF8_ROUND_CORNERS;
-use comfy_table::presets::UTF8_FULL;
-use comfy_table::{Cell, Color, Row, Table};
+use comfy_table::{Cell, Color, Row};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -45,6 +45,15 @@ pub fn find_large_files<P: AsRef<Path>>(
 
 /// Print formatted table of large files found
 pub fn format_large_files_table(files: &[LargeFileEntry], min_size: u64) -> String {
+    format_large_files_table_with_width(files, min_size, get_terminal_width())
+}
+
+/// Print formatted table of large files found with explicit width
+pub fn format_large_files_table_with_width(
+    files: &[LargeFileEntry],
+    min_size: u64,
+    width: u16,
+) -> String {
     if files.is_empty() {
         return format!(
             "No files found exceeding {} in the specified path.",
@@ -52,16 +61,23 @@ pub fn format_large_files_table(files: &[LargeFileEntry], min_size: u64) -> Stri
         );
     }
 
-    let mut table = Table::new();
-    table
-        .load_preset(UTF8_FULL)
-        .apply_modifier(UTF8_ROUND_CORNERS)
-        .set_header(vec![
+    let mut table = create_styled_table_with_width(width);
+    let is_compact = width < 80;
+
+    if is_compact {
+        table.set_header(vec![
+            Cell::new("#").fg(Color::DarkGrey),
+            Cell::new("File Name").fg(Color::Cyan),
+            Cell::new("Size").fg(Color::Green),
+        ]);
+    } else {
+        table.set_header(vec![
             Cell::new("#").fg(Color::DarkGrey),
             Cell::new("File Name").fg(Color::Cyan),
             Cell::new("Size").fg(Color::Green),
             Cell::new("Path").fg(Color::DarkGrey),
         ]);
+    }
 
     for (i, file) in files.iter().enumerate() {
         let name = file
@@ -70,12 +86,20 @@ pub fn format_large_files_table(files: &[LargeFileEntry], min_size: u64) -> Stri
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| file.path.display().to_string());
 
-        table.add_row(Row::from(vec![
-            Cell::new((i + 1).to_string()).fg(Color::DarkGrey),
-            Cell::new(name),
-            Cell::new(format_bytes(file.size_bytes)).fg(Color::Green),
-            Cell::new(file.path.display().to_string()).fg(Color::DarkGrey),
-        ]));
+        if is_compact {
+            table.add_row(Row::from(vec![
+                Cell::new((i + 1).to_string()).fg(Color::DarkGrey),
+                Cell::new(name),
+                Cell::new(format_bytes(file.size_bytes)).fg(Color::Green),
+            ]));
+        } else {
+            table.add_row(Row::from(vec![
+                Cell::new((i + 1).to_string()).fg(Color::DarkGrey),
+                Cell::new(name),
+                Cell::new(format_bytes(file.size_bytes)).fg(Color::Green),
+                Cell::new(contract_tilde(&file.path)).fg(Color::DarkGrey),
+            ]));
+        }
     }
 
     format!(
@@ -84,3 +108,4 @@ pub fn format_large_files_table(files: &[LargeFileEntry], min_size: u64) -> Stri
         table
     )
 }
+
