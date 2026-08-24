@@ -42,7 +42,32 @@ pub struct DiskSnapshot {
     pub total_size_bytes: u64,
     pub total_files_count: usize,
     pub disk_stats: Option<DiskStatsSnapshot>,
+    #[serde(default)]
+    pub apfs_snapshots_count: Option<usize>,
+    #[serde(default)]
+    pub apfs_snapshots: Vec<String>,
     pub items: HashMap<String, SnapshotItem>,
+}
+
+/// Query macOS `tmutil` to retrieve active APFS local snapshots
+pub fn get_apfs_local_snapshots() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("tmutil")
+            .args(["listlocalsnapshots", "/"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                return stdout
+                    .lines()
+                    .filter(|line| line.contains("com.apple.TimeMachine"))
+                    .map(|s| s.trim().to_string())
+                    .collect();
+            }
+        }
+    }
+    Vec::new()
 }
 
 /// Returns the directory where snapshots are stored (`~/.cli-ner/snapshots`)
@@ -81,9 +106,9 @@ pub fn scan_path_tree<P: AsRef<Path>>(
         return (0, 0);
     }
 
-    // If we've reached the maximum depth, calculate size of this directory directly
+    // If we've reached the maximum depth, calculate total recursive size of this directory directly
     if current_depth >= max_depth {
-        let (size, count) = calculate_shallow_size(path);
+        let (size, count) = calculate_size(path).unwrap_or((0, 0));
         items.insert(
             contracted.clone(),
             SnapshotItem {
@@ -104,11 +129,12 @@ pub fn scan_path_tree<P: AsRef<Path>>(
             let entry_path = entry.path();
             let entry_name = entry.file_name().to_string_lossy().to_string();
 
-            // Skip git internals, sandboxes, and noisy lock directories
+            // Skip git internals, node_modules, and massive simulator/sandbox sub-trees to keep snapshot creation fast
             if entry_name == ".git"
-                || entry_name == ".Trash"
                 || entry_name == "Containers"
                 || entry_name == "Group Containers"
+                || entry_name == "CoreSimulator"
+                || entry_name == "node_modules"
             {
                 continue;
             }
@@ -131,27 +157,6 @@ pub fn scan_path_tree<P: AsRef<Path>>(
     );
 
     (total_dir_size, total_dir_files)
-}
-
-/// Calculate shallow size of a directory without deep traversal
-fn calculate_shallow_size<P: AsRef<Path>>(path: P) -> (u64, usize) {
-    let mut total_size = 0u64;
-    let mut total_files = 0usize;
-
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
-                    total_size += meta.len();
-                    total_files += 1;
-                } else if meta.is_dir() {
-                    total_files += 1;
-                }
-            }
-        }
-    }
-
-    (total_size, total_files)
 }
 
 /// Create a new snapshot of the specified root path (or user home) and optionally save to disk
@@ -181,33 +186,54 @@ pub fn create_snapshot(
     let (total_size_bytes, total_files_count) =
         scan_path_tree(&root_path, 0, max_depth, &mut items);
 
-    // Also capture critical system locations for comprehensive macOS tracking
-    let system_critical_paths = [
-        "/var/vm/sleepimage",
-        "/var/vm",
+    // Also capture critical developer and system locations known for significant bloat
+    let key_monitored_paths = [
+        // Docker & Container VM disks
+        "~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
+        "~/Library/Containers/com.docker.docker/Data/vms/0/Docker.raw",
+        "~/.orbstack/data",
+        "~/.colima",
+        // Xcode & Developer caches
+        "~/Library/Developer/Xcode/DerivedData",
+        "~/Library/Developer/Xcode/Archives",
+        "~/Library/Developer/Xcode/iOS DeviceSupport",
+        // App sandbox downloads
+        "~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads",
+        // System and logs
         "/Library/Logs",
         "/var/log",
+        "/var/vm/sleepimage",
+        "/var/vm",
         "/Library/Updates",
     ];
 
-    for sys_path in system_critical_paths {
-        let p = Path::new(sys_path);
-        if p.exists() {
-            if let Ok((size, count)) = calculate_size(p) {
+    for path_str in key_monitored_paths {
+        let expanded = expand_tilde(path_str);
+        if expanded.exists() {
+            if let Ok((size, count)) = calculate_size(&expanded) {
                 if size > 0 {
+                    let contracted = contract_tilde(&expanded);
                     items.insert(
-                        sys_path.to_string(),
+                        contracted.clone(),
                         SnapshotItem {
-                            path: sys_path.to_string(),
+                            path: contracted,
                             size_bytes: size,
                             file_count: count,
-                            is_dir: p.is_dir(),
+                            is_dir: expanded.is_dir(),
                         },
                     );
                 }
             }
         }
     }
+
+    // Capture APFS local snapshot count
+    let apfs_snaps = get_apfs_local_snapshots();
+    let apfs_count = if apfs_snaps.is_empty() {
+        None
+    } else {
+        Some(apfs_snaps.len())
+    };
 
     // Capture root disk statistics
     let disk_stats = get_disk_stats();
@@ -238,6 +264,8 @@ pub fn create_snapshot(
         total_size_bytes,
         total_files_count,
         disk_stats: root_disk,
+        apfs_snapshots_count: apfs_count,
+        apfs_snapshots: apfs_snaps,
         items,
     };
 
@@ -437,11 +465,29 @@ mod tests {
                 available_bytes: 100_000_000_000,
                 used_percent: 80.0,
             }),
+            apfs_snapshots_count: Some(1),
+            apfs_snapshots: vec!["com.apple.TimeMachine.2026-08-22-120000.local".to_string()],
             items: HashMap::new(),
         };
 
-        let formatted = format_snapshots_table_with_width(&[snap], 120);
+        let formatted = format_snapshots_table_with_width(&[snap.clone()], 120);
         assert!(formatted.contains("20260822_120000_test"));
         assert!(formatted.contains("test-label"));
+
+        // Verify backward compatibility: older snapshot JSON without APFS fields deserializes cleanly
+        let old_json = r#"{
+            "id": "old_snap",
+            "name": null,
+            "timestamp": "2026-08-22T10:00:00+02:00",
+            "root_path": "~",
+            "total_size_bytes": 1000,
+            "total_files_count": 10,
+            "disk_stats": null,
+            "items": {}
+        }"#;
+        let deserialized: DiskSnapshot = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.id, "old_snap");
+        assert_eq!(deserialized.apfs_snapshots_count, None);
+        assert!(deserialized.apfs_snapshots.is_empty());
     }
 }

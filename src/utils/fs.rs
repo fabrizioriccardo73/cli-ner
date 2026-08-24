@@ -19,15 +19,26 @@ pub fn calculate_size<P: AsRef<Path>>(path: P) -> Result<(u64, usize)> {
     let mut total_size = 0u64;
     let mut total_files = 0usize;
 
-    for entry in WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() {
-                total_size += meta.len();
-                total_files += 1;
+    let mut it = WalkDir::new(path).follow_links(false).max_depth(5).into_iter();
+    while let Some(entry) = it.next() {
+        if let Ok(entry) = entry {
+            if entry.file_type().is_dir() {
+                let name = entry.file_name();
+                if name == ".git"
+                    || name == "CoreSimulator"
+                    || name == "Containers"
+                    || name == "Group Containers"
+                    || name == "node_modules"
+                {
+                    it.skip_current_dir();
+                    continue;
+                }
+            }
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total_size += meta.len();
+                    total_files += 1;
+                }
             }
         }
     }

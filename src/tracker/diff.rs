@@ -40,6 +40,14 @@ pub struct SnapshotDiffReport {
     pub total_growth_bytes: u64,
     pub total_reduction_bytes: u64,
     pub net_delta_bytes: i64,
+    #[serde(default)]
+    pub old_apfs_snapshots_count: Option<usize>,
+    #[serde(default)]
+    pub new_apfs_snapshots_count: Option<usize>,
+    #[serde(default)]
+    pub apfs_snapshots_delta: Option<i64>,
+    #[serde(default)]
+    pub unaccounted_delta_bytes: Option<i64>,
     pub entries: Vec<DiffEntry>,
 }
 
@@ -117,6 +125,27 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
 
     let net_delta_bytes = (total_growth_bytes as i64) - (total_reduction_bytes as i64);
 
+    let old_apfs_snapshots_count = old.apfs_snapshots_count.or_else(|| {
+        if old.apfs_snapshots.is_empty() {
+            None
+        } else {
+            Some(old.apfs_snapshots.len())
+        }
+    });
+    let new_apfs_snapshots_count = new.apfs_snapshots_count.or_else(|| {
+        if new.apfs_snapshots.is_empty() {
+            None
+        } else {
+            Some(new.apfs_snapshots.len())
+        }
+    });
+    let apfs_snapshots_delta = match (old_apfs_snapshots_count, new_apfs_snapshots_count) {
+        (Some(old_cnt), Some(new_cnt)) => Some((new_cnt as i64) - (old_cnt as i64)),
+        _ => None,
+    };
+
+    let unaccounted_delta_bytes = disk_available_delta.map(|d_avail| (-d_avail) - net_delta_bytes);
+
     SnapshotDiffReport {
         old_id: old.id.clone(),
         old_name: old.name.clone(),
@@ -131,6 +160,10 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
         total_growth_bytes,
         total_reduction_bytes,
         net_delta_bytes,
+        old_apfs_snapshots_count,
+        new_apfs_snapshots_count,
+        apfs_snapshots_delta,
+        unaccounted_delta_bytes,
         entries,
     }
 }
@@ -223,89 +256,88 @@ pub fn format_diff_table_with_width(
             )
             .green()
         ));
-        return out;
-    }
-
-    let mut table = create_styled_table_with_width(width);
-    let is_compact = width < 100;
-
-    if is_compact {
-        table.set_header(vec![
-            Cell::new("Path / Target").fg(Color::Cyan),
-            Cell::new("Previous").fg(Color::DarkGrey),
-            Cell::new("Current").fg(Color::White),
-            Cell::new("Growth (Δ)").fg(Color::Yellow),
-            Cell::new("Status").fg(Color::Magenta),
-        ]);
-
-        for e in &filtered_entries {
-            let status_str = if e.is_new {
-                "NEW".green().to_string()
-            } else if e.is_deleted {
-                "DELETED".red().to_string()
-            } else if let Some(pct) = e.percentage_change {
-                if pct >= 0.0 {
-                    format!("+{:.1}%", pct).red().to_string()
-                } else {
-                    format!("{:.1}%", pct).green().to_string()
-                }
-            } else {
-                "-".to_string()
-            };
-
-            table.add_row(Row::from(vec![
-                Cell::new(&e.path),
-                Cell::new(format_bytes(e.old_size_bytes)),
-                Cell::new(format_bytes(e.new_size_bytes)),
-                Cell::new(format_delta_bytes(e.delta_bytes)),
-                Cell::new(status_str),
-            ]));
-        }
     } else {
-        table.set_header(vec![
-            Cell::new("Path / Target Directory").fg(Color::Cyan),
-            Cell::new("Previous Size").fg(Color::DarkGrey),
-            Cell::new("Current Size").fg(Color::White),
-            Cell::new("Growth (Δ Bytes)").fg(Color::Yellow),
-            Cell::new("Files (Δ)").fg(Color::Blue),
-            Cell::new("Change (%)").fg(Color::Magenta),
-        ]);
+        let mut table = create_styled_table_with_width(width);
+        let is_compact = width < 100;
 
-        for e in &filtered_entries {
-            let change_str = if e.is_new {
-                "✨ NEW".green().bold().to_string()
-            } else if e.is_deleted {
-                "🗑️ DELETED".red().to_string()
-            } else if let Some(pct) = e.percentage_change {
-                if pct >= 0.0 {
-                    format!("+{:.1}%", pct).red().bold().to_string()
+        if is_compact {
+            table.set_header(vec![
+                Cell::new("Path / Target").fg(Color::Cyan),
+                Cell::new("Previous").fg(Color::DarkGrey),
+                Cell::new("Current").fg(Color::White),
+                Cell::new("Growth (Δ)").fg(Color::Yellow),
+                Cell::new("Status").fg(Color::Magenta),
+            ]);
+
+            for e in &filtered_entries {
+                let status_str = if e.is_new {
+                    "NEW".green().to_string()
+                } else if e.is_deleted {
+                    "DELETED".red().to_string()
+                } else if let Some(pct) = e.percentage_change {
+                    if pct >= 0.0 {
+                        format!("+{:.1}%", pct).red().to_string()
+                    } else {
+                        format!("{:.1}%", pct).green().to_string()
+                    }
                 } else {
-                    format!("{:.1}%", pct).green().bold().to_string()
-                }
-            } else {
-                "-".to_string()
-            };
+                    "-".to_string()
+                };
 
-            let files_delta_str = if e.delta_files > 0 {
-                format!("+{}", e.delta_files).yellow().to_string()
-            } else if e.delta_files < 0 {
-                format!("{}", e.delta_files).green().to_string()
-            } else {
-                "0".to_string()
-            };
+                table.add_row(Row::from(vec![
+                    Cell::new(&e.path),
+                    Cell::new(format_bytes(e.old_size_bytes)),
+                    Cell::new(format_bytes(e.new_size_bytes)),
+                    Cell::new(format_delta_bytes(e.delta_bytes)),
+                    Cell::new(status_str),
+                ]));
+            }
+        } else {
+            table.set_header(vec![
+                Cell::new("Path / Target Directory").fg(Color::Cyan),
+                Cell::new("Previous Size").fg(Color::DarkGrey),
+                Cell::new("Current Size").fg(Color::White),
+                Cell::new("Growth (Δ Bytes)").fg(Color::Yellow),
+                Cell::new("Files (Δ)").fg(Color::Blue),
+                Cell::new("Change (%)").fg(Color::Magenta),
+            ]);
 
-            table.add_row(Row::from(vec![
-                Cell::new(&e.path),
-                Cell::new(format_bytes(e.old_size_bytes)).fg(Color::DarkGrey),
-                Cell::new(format_bytes(e.new_size_bytes)).fg(Color::White),
-                Cell::new(format_delta_bytes(e.delta_bytes)),
-                Cell::new(files_delta_str),
-                Cell::new(change_str),
-            ]));
+            for e in &filtered_entries {
+                let change_str = if e.is_new {
+                    "✨ NEW".green().bold().to_string()
+                } else if e.is_deleted {
+                    "🗑️ DELETED".red().to_string()
+                } else if let Some(pct) = e.percentage_change {
+                    if pct >= 0.0 {
+                        format!("+{:.1}%", pct).red().bold().to_string()
+                    } else {
+                        format!("{:.1}%", pct).green().bold().to_string()
+                    }
+                } else {
+                    "-".to_string()
+                };
+
+                let files_delta_str = if e.delta_files > 0 {
+                    format!("+{}", e.delta_files).yellow().to_string()
+                } else if e.delta_files < 0 {
+                    format!("{}", e.delta_files).green().to_string()
+                } else {
+                    "0".to_string()
+                };
+
+                table.add_row(Row::from(vec![
+                    Cell::new(&e.path),
+                    Cell::new(format_bytes(e.old_size_bytes)).fg(Color::DarkGrey),
+                    Cell::new(format_bytes(e.new_size_bytes)).fg(Color::White),
+                    Cell::new(format_delta_bytes(e.delta_bytes)),
+                    Cell::new(files_delta_str),
+                    Cell::new(change_str),
+                ]));
+            }
         }
-    }
 
-    out.push_str(&format!("\n{}\n", table));
+        out.push_str(&format!("\n{}\n", table));
+    }
 
     // 4. Growth Summary and Top Offenders
     out.push_str(&format!(
@@ -317,7 +349,7 @@ pub fn format_diff_table_with_width(
         format!("-{}", format_bytes(report.total_reduction_bytes)).green().bold()
     ));
     out.push_str(&format!(
-        "⚖️  Net Size Change:       {}\n\n",
+        "⚖️  Net Size Change:       {}\n",
         format_delta_bytes(report.net_delta_bytes)
     ));
 
@@ -334,6 +366,78 @@ pub fn format_diff_table_with_width(
             format_bytes(top_grower.delta_bytes as u64).bold().red(),
             pct_str.bold().red()
         ));
+    }
+
+    // 5. Unaccounted Space Diagnostic Section
+    if let Some(unaccounted) = report.unaccounted_delta_bytes {
+        if unaccounted.abs() >= 200_000_000 {
+            out.push_str(&format!(
+                "\n⚠️  {}\n",
+                format!(
+                    "Unaccounted Storage Discrepancy: ~{}",
+                    format_bytes(unaccounted.unsigned_abs())
+                )
+                .yellow()
+                .bold()
+            ));
+
+            if unaccounted > 0 {
+                out.push_str(&format!(
+                    "   {} (Disk Free Δ {}) vs Tracked Files (Δ {})\n",
+                    "The system consumed more disk space than what was recorded in individual files:".dimmed(),
+                    delta_avail_str(report.disk_available_delta.unwrap_or(0)),
+                    format_delta_bytes(report.net_delta_bytes),
+                ));
+            } else {
+                out.push_str(&format!(
+                    "   {} (Disk Free Δ {}) vs Tracked Files (Δ {})\n",
+                    "More disk space was freed than what was recorded in individual files:".dimmed(),
+                    delta_avail_str(report.disk_available_delta.unwrap_or(0)),
+                    format_delta_bytes(report.net_delta_bytes),
+                ));
+            }
+
+            out.push_str("   🔍 Potential sources of unindexed or system-level space:\n");
+
+            if let Some(count) = report.new_apfs_snapshots_count {
+                let delta_str = report
+                    .apfs_snapshots_delta
+                    .map(|d| {
+                        if d > 0 {
+                            format!(" (Δ +{})", d).yellow().to_string()
+                        } else if d < 0 {
+                            format!(" (Δ {})", d).green().to_string()
+                        } else {
+                            "".to_string()
+                        }
+                    })
+                    .unwrap_or_default();
+
+                out.push_str(&format!(
+                    "      • 📸 APFS Local Snapshots: {} active snapshot(s){}. macOS Time Machine snapshots hold deleted blocks until purged.\n        Reclaim via: `{}`\n",
+                    count.to_string().bold(),
+                    delta_str,
+                    "tmutil listlocalsnapshots /".cyan()
+                ));
+            } else {
+                out.push_str(&format!(
+                    "      • 📸 APFS Local Snapshots: Hidden Time Machine / system snapshots (run `{}`)\n",
+                    "tmutil listlocalsnapshots /".cyan()
+                ));
+            }
+
+            out.push_str(&format!(
+                "      • 🐳 Docker & Sandbox Containers: Virtual VM disks in `{}` or dangling layers\n",
+                "~/Library/Containers".cyan()
+            ));
+            out.push_str(
+                "      • ⚙️ System, Xcode & Purgeable Space: Memory swap (`/var/vm`), macOS update caches, simulator runtimes\n",
+            );
+            out.push_str(&format!(
+                "      💡 Tip: Run `{}` to perform an in-depth audit of phantom developer & system bloat.\n",
+                "cli-ner bloat".cyan().bold()
+            ));
+        }
     }
 
     out
@@ -404,6 +508,8 @@ mod tests {
             total_size_bytes: 1_000_000_000,
             total_files_count: 100,
             disk_stats: None,
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
             items: old_items,
         };
 
@@ -415,6 +521,8 @@ mod tests {
             total_size_bytes: 7_000_000_000,
             total_files_count: 501,
             disk_stats: None,
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
             items: new_items,
         };
 
@@ -425,5 +533,64 @@ mod tests {
         let formatted = format_diff_table(&diff, 10, 100_000_000);
         assert!(formatted.contains("~/Library/Caches/Google"));
         assert!(formatted.contains("~/Downloads/large_video.mov"));
+    }
+
+    #[test]
+    fn test_unaccounted_discrepancy_diagnostic() {
+        use crate::tracker::snapshot::DiskStatsSnapshot;
+
+        let old = DiskSnapshot {
+            id: "20260822_170801".to_string(),
+            name: None,
+            timestamp: Local::now(),
+            root_path: "~".to_string(),
+            total_size_bytes: 3_000_000_000,
+            total_files_count: 100,
+            disk_stats: Some(DiskStatsSnapshot {
+                name: "Macintosh HD".to_string(),
+                mount_point: "/".to_string(),
+                total_bytes: 500_000_000_000,
+                used_bytes: 469_980_000_000,
+                available_bytes: 30_020_000_000, // 30.02 GB
+                used_percent: 94.0,
+            }),
+            apfs_snapshots_count: Some(1),
+            apfs_snapshots: vec!["com.apple.TimeMachine.2026-08-22-170801.local".to_string()],
+            items: HashMap::new(),
+        };
+
+        let new = DiskSnapshot {
+            id: "20260824_103350".to_string(),
+            name: None,
+            timestamp: Local::now(),
+            root_path: "~".to_string(),
+            total_size_bytes: 3_048_000_000,
+            total_files_count: 120,
+            disk_stats: Some(DiskStatsSnapshot {
+                name: "Macintosh HD".to_string(),
+                mount_point: "/".to_string(),
+                total_bytes: 500_000_000_000,
+                used_bytes: 476_690_000_000,
+                available_bytes: 23_310_000_000, // 23.31 GB (delta -6.71 GB)
+                used_percent: 95.3,
+            }),
+            apfs_snapshots_count: Some(3), // +2 snapshots
+            apfs_snapshots: vec![
+                "com.apple.TimeMachine.2026-08-22-170801.local".to_string(),
+                "com.apple.TimeMachine.2026-08-23-120000.local".to_string(),
+                "com.apple.TimeMachine.2026-08-24-103350.local".to_string(),
+            ],
+            items: HashMap::new(),
+        };
+
+        let diff = compare_snapshots(&old, &new);
+        assert_eq!(diff.disk_available_delta, Some(-6_710_000_000));
+        assert_eq!(diff.apfs_snapshots_delta, Some(2));
+        assert_eq!(diff.unaccounted_delta_bytes, Some(6_710_000_000));
+
+        let formatted = format_diff_table(&diff, 10, 10_000_000);
+        assert!(formatted.contains("Unaccounted Storage Discrepancy"));
+        assert!(formatted.contains("APFS Local Snapshots"));
+        assert!(formatted.contains("tmutil listlocalsnapshots"));
     }
 }
