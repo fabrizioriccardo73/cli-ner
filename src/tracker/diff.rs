@@ -7,7 +7,7 @@ use chrono::{DateTime, Local};
 use colored::*;
 use comfy_table::{Cell, Color, Row};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Single entry representing size/file change for a specific path
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +51,68 @@ pub struct SnapshotDiffReport {
     pub entries: Vec<DiffEntry>,
 }
 
+/// Check if `parent` is a strict directory ancestor of `child`
+pub fn is_path_ancestor(parent: &str, child: &str) -> bool {
+    if parent == child || parent.is_empty() || child.is_empty() {
+        return false;
+    }
+    if parent == "/" {
+        return child.starts_with('/') && child != "/";
+    }
+    if parent == "~" {
+        return child.starts_with("~/");
+    }
+    let p_bytes = parent.as_bytes();
+    let c_bytes = child.as_bytes();
+    if c_bytes.starts_with(p_bytes) {
+        if parent.ends_with('/') {
+            c_bytes.len() > p_bytes.len()
+        } else {
+            c_bytes.get(p_bytes.len()) == Some(&b'/')
+        }
+    } else {
+        false
+    }
+}
+
+/// Computes non-overlapping direct deltas for each path by subtracting immediate child deltas
+pub fn compute_direct_deltas(path_deltas: &HashMap<String, i64>) -> HashMap<String, i64> {
+    let all_paths: Vec<&String> = path_deltas.keys().collect();
+    let mut direct_deltas = HashMap::new();
+
+    for &p in &all_paths {
+        let p_delta = *path_deltas.get(p).unwrap_or(&0);
+
+        // Find all descendants of p in path_deltas
+        let descendants: Vec<&String> = all_paths
+            .iter()
+            .copied()
+            .filter(|&c| is_path_ancestor(p, c))
+            .collect();
+
+        // Immediate children are descendants that have no intermediate ancestor between p and c
+        let immediate_children: Vec<&String> = descendants
+            .iter()
+            .copied()
+            .filter(|&c| {
+                !descendants
+                    .iter()
+                    .any(|&m| m != c && is_path_ancestor(m, c))
+            })
+            .collect();
+
+        let children_delta_sum: i64 = immediate_children
+            .iter()
+            .map(|&c| *path_deltas.get(c).unwrap_or(&0))
+            .sum();
+
+        let direct_delta = p_delta - children_delta_sum;
+        direct_deltas.insert(p.clone(), direct_delta);
+    }
+
+    direct_deltas
+}
+
 /// Compare two `DiskSnapshot` structures and generate a difference report
 pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiffReport {
     let mut all_paths = HashSet::new();
@@ -62,8 +124,7 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
     }
 
     let mut entries = Vec::new();
-    let mut total_growth_bytes = 0u64;
-    let mut total_reduction_bytes = 0u64;
+    let mut path_deltas = HashMap::new();
 
     for path in all_paths {
         let old_item = old.items.get(&path);
@@ -82,11 +143,7 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
             continue;
         }
 
-        if delta_bytes > 0 {
-            total_growth_bytes += delta_bytes as u64;
-        } else {
-            total_reduction_bytes += delta_bytes.unsigned_abs();
-        }
+        path_deltas.insert(path.clone(), delta_bytes);
 
         let is_new = old_item.is_none() && new_item.is_some();
         let is_deleted = old_item.is_some() && new_item.is_none();
@@ -115,6 +172,19 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
 
     // Sort by largest growth first (positive delta descending), then largest reductions
     entries.sort_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+
+    // Calculate non-overlapping hierarchical direct deltas to avoid double/triple counting
+    let direct_deltas = compute_direct_deltas(&path_deltas);
+    let mut total_growth_bytes = 0u64;
+    let mut total_reduction_bytes = 0u64;
+
+    for delta in direct_deltas.values() {
+        if *delta > 0 {
+            total_growth_bytes += *delta as u64;
+        } else if *delta < 0 {
+            total_reduction_bytes += delta.unsigned_abs();
+        }
+    }
 
     let old_disk_available = old.disk_stats.as_ref().map(|d| d.available_bytes);
     let new_disk_available = new.disk_stats.as_ref().map(|d| d.available_bytes);
@@ -353,17 +423,29 @@ pub fn format_diff_table_with_width(
         format_delta_bytes(report.net_delta_bytes)
     ));
 
-    // Highlight top space consumer
-    if let Some(top_grower) = filtered_entries.iter().find(|e| e.delta_bytes > 0) {
-        let pct_str = top_grower
+    // Highlight top space consumer (preferring leaf / specific paths over general root)
+    let top_grower = filtered_entries
+        .iter()
+        .filter(|e| e.delta_bytes > 0 && e.path != "~" && e.path != "/")
+        .filter(|e| !filtered_entries.iter().any(|other| is_path_ancestor(&e.path, &other.path) && other.delta_bytes > 0))
+        .max_by_key(|e| e.delta_bytes)
+        .or_else(|| {
+            filtered_entries
+                .iter()
+                .filter(|e| e.delta_bytes > 0)
+                .max_by_key(|e| e.delta_bytes)
+        });
+
+    if let Some(grower) = top_grower {
+        let pct_str = grower
             .percentage_change
             .map(|p| format!(" (+{:.1}%)", p))
             .unwrap_or_default();
 
         out.push_str(&format!(
             "🏆 Top Space Consumer (Grower): {} (+{}{})\n",
-            top_grower.path.bold().white(),
-            format_bytes(top_grower.delta_bytes as u64).bold().red(),
+            grower.path.bold().white(),
+            format_bytes(grower.delta_bytes as u64).bold().red(),
             pct_str.bold().red()
         ));
     }
@@ -382,12 +464,21 @@ pub fn format_diff_table_with_width(
             ));
 
             if unaccounted > 0 {
-                out.push_str(&format!(
-                    "   {} (Disk Free Δ {}) vs Tracked Files (Δ {})\n",
-                    "The system consumed more disk space than what was recorded in individual files:".dimmed(),
-                    delta_avail_str(report.disk_available_delta.unwrap_or(0)),
-                    format_delta_bytes(report.net_delta_bytes),
-                ));
+                if report.net_delta_bytes < 0 && report.disk_available_delta.unwrap_or(0) >= 0 {
+                    out.push_str(&format!(
+                        "   {} (Disk Free Δ {}) vs Tracked Files Reclaimed (Δ {})\n",
+                        "Tracked files were deleted, but disk free space did not increase accordingly:".dimmed(),
+                        delta_avail_str(report.disk_available_delta.unwrap_or(0)),
+                        format_delta_bytes(report.net_delta_bytes),
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "   {} (Disk Free Δ {}) vs Tracked Files (Δ {})\n",
+                        "The system consumed more disk space than what was recorded in individual files:".dimmed(),
+                        delta_avail_str(report.disk_available_delta.unwrap_or(0)),
+                        format_delta_bytes(report.net_delta_bytes),
+                    ));
+                }
             } else {
                 out.push_str(&format!(
                     "   {} (Disk Free Δ {}) vs Tracked Files (Δ {})\n",
@@ -427,7 +518,7 @@ pub fn format_diff_table_with_width(
             }
 
             out.push_str(&format!(
-                "      • 🐳 Docker & Sandbox Containers: Virtual VM disks in `{}` or dangling layers\n",
+                "      • 🐳 Docker & Sandbox Containers: Virtual VM disks in `{}` or `~/.orbstack`\n",
                 "~/Library/Containers".cyan()
             ));
             out.push_str(
@@ -466,6 +557,126 @@ mod tests {
     use super::*;
     use crate::tracker::snapshot::SnapshotItem;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_is_path_ancestor() {
+        assert!(is_path_ancestor("~", "~/Downloads"));
+        assert!(is_path_ancestor("~/Downloads", "~/Downloads/Obsidian.dmg"));
+        assert!(is_path_ancestor("~/.local", "~/.local/share"));
+        assert!(!is_path_ancestor("~/.local", "~/.local_backup"));
+        assert!(!is_path_ancestor("~/Downloads", "~/Downloads"));
+        assert!(is_path_ancestor("/", "/var/log"));
+        assert!(is_path_ancestor("/var", "/var/log"));
+        assert!(!is_path_ancestor("/var/log", "/var/logs_backup"));
+    }
+
+    #[test]
+    fn test_hierarchical_no_double_counting() {
+        let mut old_items = HashMap::new();
+        // Root ~: 100 GB
+        old_items.insert("~".to_string(), SnapshotItem {
+            path: "~".to_string(),
+            size_bytes: 100_000_000_000,
+            file_count: 1000,
+            is_dir: true,
+        });
+        // ~/OrbStack: 60 GB
+        old_items.insert("~/OrbStack".to_string(), SnapshotItem {
+            path: "~/OrbStack".to_string(),
+            size_bytes: 60_000_000_000,
+            file_count: 500,
+            is_dir: true,
+        });
+        // ~/OrbStack/docker: 60 GB
+        old_items.insert("~/OrbStack/docker".to_string(), SnapshotItem {
+            path: "~/OrbStack/docker".to_string(),
+            size_bytes: 60_000_000_000,
+            file_count: 500,
+            is_dir: true,
+        });
+        // ~/Downloads: 10 GB
+        old_items.insert("~/Downloads".to_string(), SnapshotItem {
+            path: "~/Downloads".to_string(),
+            size_bytes: 10_000_000_000,
+            file_count: 10,
+            is_dir: true,
+        });
+
+        let mut new_items = HashMap::new();
+        // Root ~: 52 GB (-48 GB net)
+        new_items.insert("~".to_string(), SnapshotItem {
+            path: "~".to_string(),
+            size_bytes: 52_000_000_000,
+            file_count: 511,
+            is_dir: true,
+        });
+        // ~/OrbStack: 10 GB (-50 GB)
+        new_items.insert("~/OrbStack".to_string(), SnapshotItem {
+            path: "~/OrbStack".to_string(),
+            size_bytes: 10_000_000_000,
+            file_count: 10,
+            is_dir: true,
+        });
+        // ~/OrbStack/docker: 10 GB (-50 GB)
+        new_items.insert("~/OrbStack/docker".to_string(), SnapshotItem {
+            path: "~/OrbStack/docker".to_string(),
+            size_bytes: 10_000_000_000,
+            file_count: 10,
+            is_dir: true,
+        });
+        // ~/Downloads: 12 GB (+2 GB)
+        new_items.insert("~/Downloads".to_string(), SnapshotItem {
+            path: "~/Downloads".to_string(),
+            size_bytes: 12_000_000_000,
+            file_count: 11,
+            is_dir: true,
+        });
+        // ~/Downloads/app.dmg: 2 GB (✨ NEW +2 GB)
+        new_items.insert("~/Downloads/app.dmg".to_string(), SnapshotItem {
+            path: "~/Downloads/app.dmg".to_string(),
+            size_bytes: 2_000_000_000,
+            file_count: 1,
+            is_dir: false,
+        });
+
+        let old = DiskSnapshot {
+            id: "snap1".to_string(),
+            name: Some("before".to_string()),
+            timestamp: Local::now(),
+            root_path: "~".to_string(),
+            total_size_bytes: 100_000_000_000,
+            total_files_count: 1000,
+            disk_stats: None,
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
+            items: old_items,
+        };
+
+        let new = DiskSnapshot {
+            id: "snap2".to_string(),
+            name: Some("after".to_string()),
+            timestamp: Local::now(),
+            root_path: "~".to_string(),
+            total_size_bytes: 52_000_000_000,
+            total_files_count: 511,
+            disk_stats: None,
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
+            items: new_items,
+        };
+
+        let diff = compare_snapshots(&old, &new);
+        // Total growth must be exactly 2 GB (Downloads / app.dmg), NOT 4 GB
+        assert_eq!(diff.total_growth_bytes, 2_000_000_000);
+        // Total reduction must be exactly 50 GB (OrbStack / docker), NOT 150 GB
+        assert_eq!(diff.total_reduction_bytes, 50_000_000_000);
+        // Net change must be exactly -48 GB
+        assert_eq!(diff.net_delta_bytes, -48_000_000_000);
+
+        let table = format_diff_table(&diff, 10, 1_000_000);
+        // Top Space Consumer should be ~/Downloads/app.dmg rather than ~/Downloads or ~
+        assert!(table.contains("Top Space Consumer (Grower): ~/Downloads/app.dmg"));
+    }
 
     #[test]
     fn test_compare_snapshots_growth() {
@@ -592,5 +803,73 @@ mod tests {
         assert!(formatted.contains("Unaccounted Storage Discrepancy"));
         assert!(formatted.contains("APFS Local Snapshots"));
         assert!(formatted.contains("tmutil listlocalsnapshots"));
+    }
+
+    #[test]
+    fn test_unaccounted_discrepancy_deleted_files_phrasing() {
+        use crate::tracker::snapshot::DiskStatsSnapshot;
+
+        let old = DiskSnapshot {
+            id: "snap1".to_string(),
+            name: None,
+            timestamp: Local::now(),
+            root_path: "~".to_string(),
+            total_size_bytes: 200_000_000_000,
+            total_files_count: 1000,
+            disk_stats: Some(DiskStatsSnapshot {
+                name: "Macintosh HD".to_string(),
+                mount_point: "/".to_string(),
+                total_bytes: 500_000_000_000,
+                used_bytes: 494_000_000_000,
+                available_bytes: 6_000_000_000, // 6 GB
+                used_percent: 98.8,
+            }),
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
+            items: HashMap::new(),
+        };
+
+        let new_items = HashMap::new();
+        // Suppose 100 GB was deleted
+        let mut old_items = HashMap::new();
+        old_items.insert("~/OrbStack/docker".to_string(), SnapshotItem {
+            path: "~/OrbStack/docker".to_string(),
+            size_bytes: 100_000_000_000,
+            file_count: 100,
+            is_dir: true,
+        });
+
+        let mut old = old;
+        old.items = old_items;
+
+        let new = DiskSnapshot {
+            id: "snap2".to_string(),
+            name: None,
+            timestamp: Local::now(),
+            root_path: "~".to_string(),
+            total_size_bytes: 100_000_000_000,
+            total_files_count: 900,
+            disk_stats: Some(DiskStatsSnapshot {
+                name: "Macintosh HD".to_string(),
+                mount_point: "/".to_string(),
+                total_bytes: 500_000_000_000,
+                used_bytes: 480_000_000_000,
+                available_bytes: 20_000_000_000, // 20 GB (delta +14 GB)
+                used_percent: 96.0,
+            }),
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
+            items: new_items,
+        };
+
+        let diff = compare_snapshots(&old, &new);
+        assert_eq!(diff.total_reduction_bytes, 100_000_000_000);
+        assert_eq!(diff.net_delta_bytes, -100_000_000_000);
+        assert_eq!(diff.disk_available_delta, Some(14_000_000_000));
+        // Discrepancy: -14 GB - (-100 GB) = +86 GB
+        assert_eq!(diff.unaccounted_delta_bytes, Some(86_000_000_000));
+
+        let formatted = format_diff_table(&diff, 10, 1_000_000);
+        assert!(formatted.contains("Tracked files were deleted, but disk free space did not increase accordingly"));
     }
 }

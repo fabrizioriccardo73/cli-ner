@@ -4,7 +4,24 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use walkdir::WalkDir;
 
-/// Calculate total size and file count in a directory or file without following symlinks.
+/// Get actual physical allocated disk space in bytes for a file or directory metadata.
+/// On Unix/macOS, this uses `st_blocks * 512` which reflects the real APFS/ext4 disk allocation,
+/// properly accounting for sparse files, dataless/cloud stubs (e.g. OneDrive/iCloud Files On-Demand),
+/// and inline files.
+#[inline]
+pub fn get_allocated_size(meta: &fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.blocks() * 512
+    }
+    #[cfg(not(unix))]
+    {
+        meta.len()
+    }
+}
+
+/// Calculate total physical allocated size and file count in a directory or file without following symlinks.
 pub fn calculate_size<P: AsRef<Path>>(path: P) -> Result<(u64, usize)> {
     let path = path.as_ref();
     if !path.exists() {
@@ -13,32 +30,32 @@ pub fn calculate_size<P: AsRef<Path>>(path: P) -> Result<(u64, usize)> {
 
     if path.is_file() || path.is_symlink() {
         let meta = fs::symlink_metadata(path).context("Failed to read metadata")?;
-        return Ok((meta.len(), 1));
+        return Ok((get_allocated_size(&meta), 1));
     }
 
     let mut total_size = 0u64;
     let mut total_files = 0usize;
 
-    let mut it = WalkDir::new(path).follow_links(false).max_depth(5).into_iter();
-    while let Some(entry) = it.next() {
-        if let Ok(entry) = entry {
-            if entry.file_type().is_dir() {
+    for entry in WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() > 0 && entry.file_type().is_dir() {
                 let name = entry.file_name();
-                if name == ".git"
+                !(name == ".git"
                     || name == "CoreSimulator"
                     || name == "Containers"
-                    || name == "Group Containers"
-                    || name == "node_modules"
-                {
-                    it.skip_current_dir();
-                    continue;
-                }
+                    || name == "Group Containers")
+            } else {
+                true
             }
+        })
+        .filter_map(|e| e.ok())
+    {
+        if entry.file_type().is_file() || entry.file_type().is_symlink() {
             if let Ok(meta) = entry.metadata() {
-                if meta.is_file() {
-                    total_size += meta.len();
-                    total_files += 1;
-                }
+                total_size += get_allocated_size(&meta);
+                total_files += 1;
             }
         }
     }
@@ -159,4 +176,26 @@ mod tests {
         let _ = fs::remove_file(&moved_path);
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_calculate_size_and_allocation() {
+        let temp_dir = std::env::temp_dir().join("test_cli_ner_calc_size");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("sample.txt");
+        {
+            let mut f = File::create(&test_file).unwrap();
+            f.write_all(b"Hello world from cli-ner").unwrap();
+        }
+
+        let meta = fs::symlink_metadata(&test_file).unwrap();
+        let alloc_size = get_allocated_size(&meta);
+        assert!(alloc_size > 0);
+
+        let (dir_size, file_count) = calculate_size(&temp_dir).unwrap();
+        assert_eq!(file_count, 1);
+        assert_eq!(dir_size, alloc_size);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+

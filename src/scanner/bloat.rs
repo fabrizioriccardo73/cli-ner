@@ -1,5 +1,5 @@
 use crate::utils::format::format_bytes;
-use crate::utils::fs::{calculate_size, contract_tilde, expand_tilde};
+use crate::utils::fs::{calculate_size, contract_tilde, expand_tilde, get_allocated_size};
 use crate::utils::platform::get_disk_stats;
 use crate::utils::table::{create_styled_table_with_width, get_terminal_width};
 use anyhow::Result;
@@ -188,7 +188,7 @@ pub fn scan_sleep_image_and_swap() -> Vec<BloatSource> {
     // Check sleepimage
     let sleepimage_path = vm_dir.join("sleepimage");
     if let Ok(meta) = fs::symlink_metadata(&sleepimage_path) {
-        let size = meta.len();
+        let size = get_allocated_size(&meta);
         if size > 0 {
             sources.push(BloatSource {
                 category: BloatCategory::SleepImageAndSwap,
@@ -212,7 +212,7 @@ pub fn scan_sleep_image_and_swap() -> Vec<BloatSource> {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("swapfile") {
                 if let Ok(meta) = entry.metadata() {
-                    total_swap += meta.len();
+                    total_swap += get_allocated_size(&meta);
                     swap_count += 1;
                 }
             }

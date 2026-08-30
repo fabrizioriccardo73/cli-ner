@@ -1,5 +1,5 @@
 use crate::utils::format::format_bytes;
-use crate::utils::fs::contract_tilde;
+use crate::utils::fs::{contract_tilde, get_allocated_size};
 use crate::utils::table::{create_styled_table_with_width, get_terminal_width};
 use anyhow::Result;
 use comfy_table::{Cell, Color, Row};
@@ -27,10 +27,11 @@ pub fn find_large_files<P: AsRef<Path>>(
         .filter_map(|e| e.ok())
     {
         if let Ok(meta) = entry.metadata() {
-            if meta.is_file() && meta.len() >= min_size_bytes {
+            let allocated_size = get_allocated_size(&meta);
+            if meta.is_file() && allocated_size >= min_size_bytes {
                 large_files.push(LargeFileEntry {
                     path: entry.path().to_path_buf(),
-                    size_bytes: meta.len(),
+                    size_bytes: allocated_size,
                 });
             }
         }

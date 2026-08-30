@@ -1,5 +1,5 @@
 use crate::utils::format::format_bytes;
-use crate::utils::fs::{calculate_size, contract_tilde, expand_tilde};
+use crate::utils::fs::{calculate_size, contract_tilde, expand_tilde, get_allocated_size};
 use crate::utils::platform::get_disk_stats;
 use crate::utils::table::{create_styled_table_with_width, get_terminal_width};
 use anyhow::{bail, Context, Result};
@@ -91,7 +91,7 @@ pub fn scan_path_tree<P: AsRef<Path>>(
 
     if path.is_file() || path.is_symlink() {
         if let Ok(meta) = fs::symlink_metadata(path) {
-            let size = if meta.is_file() { meta.len() } else { 0 };
+            let size = if meta.is_file() { get_allocated_size(&meta) } else { 0 };
             items.insert(
                 contracted.clone(),
                 SnapshotItem {
