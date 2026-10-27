@@ -25,7 +25,10 @@ fn has_command(cmd: &str) -> bool {
 /// Listing children rather than the directory itself keeps the root in place (the
 /// allowlist marks these paths `contents_only`) and lets the user pick individual
 /// entries in interactive mode.
-fn children_as_targets(dir: &Path, describe: impl Fn(&str) -> String) -> Vec<CleanTargetItem> {
+pub(crate) fn children_as_targets(
+    dir: &Path,
+    describe: impl Fn(&str) -> String,
+) -> Vec<CleanTargetItem> {
     let mut items = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {

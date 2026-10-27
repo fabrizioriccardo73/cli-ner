@@ -20,10 +20,7 @@ const EXTENDED_CACHE_ROOTS: &[(&str, &str)] = &[
         "~/Library/Application Support/com.apple.mobileAssetDesktop",
         "Downloaded dynamic wallpaper/screensaver asset",
     ),
-    (
-        "~/.cache/fontconfig",
-        "fontconfig cache entry",
-    ),
+    ("~/.cache/fontconfig", "fontconfig cache entry"),
 ];
 
 pub struct ExtendedAppCacheCleaner;

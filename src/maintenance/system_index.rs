@@ -62,8 +62,9 @@ fn find_envelope_index() -> Option<PathBuf> {
 
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let is_version_dir =
-            name.starts_with('V') && name.len() > 1 && name[1..].chars().all(|c| c.is_ascii_digit());
+        let is_version_dir = name.starts_with('V')
+            && name.len() > 1
+            && name[1..].chars().all(|c| c.is_ascii_digit());
 
         if is_version_dir {
             let candidate = entry.path().join("MailData").join("Envelope Index");

@@ -1,3 +1,6 @@
+use crate::cleaner::app_caches::{
+    AppSupportCacheCleaner, BiomeCleaner, ContainerCacheCleaner, MetalShaderCacheCleaner,
+};
 use crate::cleaner::dev_tools::{
     CargoCacheCleaner, DockerCleaner, GradleCacheCleaner, HomebrewCleaner, MavenCacheCleaner,
     NpmCacheCleaner, PipCacheCleaner,
@@ -41,6 +44,10 @@ impl CleanerRegistry {
             Box::new(SimulatorCleaner),
             Box::new(DockerCleaner),
             Box::new(ExtendedAppCacheCleaner),
+            Box::new(AppSupportCacheCleaner),
+            Box::new(ContainerCacheCleaner),
+            Box::new(MetalShaderCacheCleaner),
+            Box::new(BiomeCleaner),
             Box::new(TrashCleaner),
         ];
 
@@ -75,7 +82,7 @@ impl CleanerRegistry {
                 if let Some(cats) = category_filter {
                     cats.contains(&c.category())
                 } else {
-                    true
+                    c.included_in_default_run()
                 }
             })
             .collect();

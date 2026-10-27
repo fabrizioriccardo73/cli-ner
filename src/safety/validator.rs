@@ -60,7 +60,16 @@ pub fn validate_path_for_cleaning<P: AsRef<Path>>(path: P) -> Result<ValidationR
         );
     }
 
-    // 5. Check if it's a symlink pointing to an unsafe location
+    // 5. A `*` in the pattern matched a real folder name on disk. If that folder (or
+    //    anything between it and the root) is a symlink, the root would actually be
+    //    somewhere else entirely — e.g. `Application Support/Foo -> ~/Documents`.
+    if let Some(base) = allowed_target.literal_base() {
+        if base != root_path {
+            ensure_root_does_not_escape(&base, &root_path)?;
+        }
+    }
+
+    // 6. Check if it's a symlink pointing to an unsafe location
     let mut warning = None;
     if is_symlink(path) {
         warning = Some(format!("Item is a symbolic link: {}", path.display()));
@@ -72,6 +81,30 @@ pub fn validate_path_for_cleaning<P: AsRef<Path>>(path: P) -> Result<ValidationR
         canonical_path: abs_path,
         warning,
     })
+}
+
+/// Fail unless `root` resolves, symlinks and all, to the same place as `base`
+/// followed by the very components that separate them on paper.
+fn ensure_root_does_not_escape(base: &Path, root: &Path) -> Result<()> {
+    let suffix = root.strip_prefix(base).map_err(|_| {
+        anyhow::anyhow!(
+            "SECURITY: {} is not under its pattern base {}",
+            root.display(),
+            base.display()
+        )
+    })?;
+
+    let canonical_base = std::fs::canonicalize(base)?;
+    let canonical_root = std::fs::canonicalize(root)?;
+
+    if canonical_root != canonical_base.join(suffix) {
+        bail!(
+            "SECURITY: {} resolves to {} through a symbolic link; refusing to clean it",
+            root.display(),
+            canonical_root.display()
+        );
+    }
+    Ok(())
 }
 
 /// Strict validation specifically for project build artifacts before deletion or trashing.
@@ -204,6 +237,22 @@ mod tests {
                 std::fs::remove_dir(&sample_cache).ok();
             }
         }
+    }
+
+    #[test]
+    fn test_root_reached_through_a_symlink_is_refused() {
+        let scratch = std::env::temp_dir().join("cli-ner-escape-test");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let base = scratch.join("Application Support");
+        let elsewhere = scratch.join("Documents");
+        std::fs::create_dir_all(base.join("RealApp/Cache")).unwrap();
+        std::fs::create_dir_all(elsewhere.join("Cache")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, base.join("LinkedApp")).unwrap();
+
+        assert!(ensure_root_does_not_escape(&base, &base.join("RealApp/Cache")).is_ok());
+        assert!(ensure_root_does_not_escape(&base, &base.join("LinkedApp/Cache")).is_err());
+
+        std::fs::remove_dir_all(&scratch).ok();
     }
 
     #[test]

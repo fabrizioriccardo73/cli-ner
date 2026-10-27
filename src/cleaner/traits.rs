@@ -84,6 +84,13 @@ pub trait Cleaner: Send + Sync {
         true
     }
 
+    /// Whether `--category all` includes this cleaner. Cleaners that touch
+    /// personal data rather than caches return `false` and only run when their
+    /// category is requested by name.
+    fn included_in_default_run(&self) -> bool {
+        true
+    }
+
     /// Scan target paths to estimate reclaimable space
     fn scan(&self) -> Result<Vec<CleanTargetItem>>;
 

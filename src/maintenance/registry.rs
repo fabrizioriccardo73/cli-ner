@@ -2,6 +2,9 @@ use crate::maintenance::disk_maintenance::{
     ApfsVerifyAction, SmartStatusCheckAction, ThinLocalSnapshotsAction,
 };
 use crate::maintenance::extended_cache::{FontCacheResetAction, QuickLookCacheResetAction};
+use crate::maintenance::privileged_cache::{
+    CoreDumpsAction, CupsSpoolCacheAction, SystemServiceCachesAction,
+};
 use crate::maintenance::system_index::{LaunchServicesRebuildAction, MailIndexVacuumAction};
 use crate::maintenance::traits::{ActionCategory, MaintenanceAction};
 
@@ -24,6 +27,9 @@ impl MaintenanceRegistry {
             Box::new(ThinLocalSnapshotsAction),
             Box::new(FontCacheResetAction),
             Box::new(QuickLookCacheResetAction),
+            Box::new(SystemServiceCachesAction),
+            Box::new(CupsSpoolCacheAction),
+            Box::new(CoreDumpsAction),
         ];
 
         Self { actions }
@@ -86,9 +92,9 @@ mod tests {
         assert_eq!(system_index.len(), 2);
 
         let disk_maintenance = registry.find_by_category(ActionCategory::DiskMaintenance);
-        assert_eq!(disk_maintenance.len(), 3);
+        assert_eq!(disk_maintenance.len(), 4);
 
         let extended_cache = registry.find_by_category(ActionCategory::ExtendedCache);
-        assert_eq!(extended_cache.len(), 2);
+        assert_eq!(extended_cache.len(), 4);
     }
 }

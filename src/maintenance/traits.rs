@@ -1,4 +1,5 @@
 use crate::report::operation_log::ActionStatus;
+use crate::utils::platform::is_root;
 use anyhow::{Context, Result};
 use std::process::Command;
 
@@ -36,8 +37,21 @@ impl SystemCommand {
     /// volume verification) where the output *is* the result — not just
     /// whether the process exited zero — so the executor needs it, not just
     /// a pass/fail bit.
-    fn run(&self) -> Result<String> {
-        let output = Command::new(self.program)
+    ///
+    /// With `elevate`, and unless cli-ner already runs as root, the command runs
+    /// through `sudo -n`: non-interactive, so it only succeeds on the credentials
+    /// the user already confirmed at the native `sudo -v` prompt shown by
+    /// `cli-ner maintain --allow-admin`. cli-ner never sees or handles a password.
+    fn run(&self, elevate: bool) -> Result<String> {
+        let mut command = if elevate && !is_root() {
+            let mut sudo = Command::new("/usr/bin/sudo");
+            sudo.args(["-n", "--", self.program]);
+            sudo
+        } else {
+            Command::new(self.program)
+        };
+
+        let output = command
             .args(&self.args)
             .output()
             .with_context(|| format!("Failed to spawn `{}`", self.display()))?;
@@ -196,7 +210,7 @@ pub trait MaintenanceAction: Send + Sync {
                 output: None,
             });
         }
-        run_system_commands(self.name(), self.commands())
+        run_system_commands(self.name(), self.commands(), self.requires_admin())
     }
 }
 
@@ -209,13 +223,14 @@ pub trait MaintenanceAction: Send + Sync {
 pub fn run_system_commands(
     action_name: &str,
     commands: Vec<SystemCommand>,
+    elevate: bool,
 ) -> Result<MaintenanceOutcome> {
     let mut commands_run = Vec::new();
     let mut outputs = Vec::new();
 
     for command in &commands {
         commands_run.push(command.display());
-        match command.run() {
+        match command.run(elevate) {
             Ok(stdout) => {
                 if !stdout.is_empty() {
                     outputs.push(stdout);

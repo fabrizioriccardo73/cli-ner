@@ -15,7 +15,10 @@ const TMUTIL_PATH: &str = "/usr/bin/tmutil";
 /// Deliberately not the `-plist` form piped through `plutil`: no shell pipe,
 /// one less process, and this is the only field each caller needs.
 fn diskutil_info_field(label: &str) -> Option<String> {
-    let output = Command::new(DISKUTIL_PATH).args(["info", "/"]).output().ok()?;
+    let output = Command::new(DISKUTIL_PATH)
+        .args(["info", "/"])
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -66,14 +69,17 @@ impl MaintenanceAction for SmartStatusCheckAction {
     }
 
     fn execute(&self) -> Result<MaintenanceOutcome> {
-        let outcome = run_system_commands(self.name(), self.commands())?;
+        let outcome = run_system_commands(self.name(), self.commands(), self.requires_admin())?;
         // Surface just the one line the user actually wants, cleanly
         // re-joined — not `diskutil`'s column-padded raw line, and not the
         // whole `diskutil info` dump the command produces.
         let smart_line = outcome
             .output
             .as_deref()
-            .and_then(|out| out.lines().find(|l| l.trim_start().starts_with("SMART Status")))
+            .and_then(|out| {
+                out.lines()
+                    .find(|l| l.trim_start().starts_with("SMART Status"))
+            })
             .and_then(|l| l.split_once(':'))
             .map(|(label, value)| format!("{}: {}", label.trim(), value.trim()));
 
@@ -225,7 +231,10 @@ mod tests {
             let commands = action.commands();
             assert_eq!(commands.len(), 1);
             let rendered = commands[0].display();
-            assert!(rendered.contains("-n "), "must never run without -n (no-modify)");
+            assert!(
+                rendered.contains("-n "),
+                "must never run without -n (no-modify)"
+            );
             assert!(rendered.ends_with(&device));
         }
     }

@@ -28,7 +28,7 @@ use crate::tracker::snapshot::{
 use crate::tui::run_dashboard;
 use crate::utils::format::{format_bytes, format_duration, parse_size_to_bytes};
 use crate::utils::fs::{contract_tilde, expand_tilde};
-use crate::utils::platform::{available_space_home, get_disk_stats};
+use crate::utils::platform::{available_space_home, get_disk_stats, is_root};
 use crate::utils::table::create_styled_table;
 use anyhow::{Context, Result};
 use colored::*;
@@ -338,9 +338,22 @@ impl App {
             "extended-app-cache" | "extended-cache" => {
                 (Some(vec![CleanCategory::ExtendedAppCache]), false)
             }
+            "app-caches" | "deep" => (
+                Some(vec![
+                    CleanCategory::ExtendedAppCache,
+                    CleanCategory::AppSupportCache,
+                    CleanCategory::ContainerCache,
+                    CleanCategory::MetalShaderCache,
+                ]),
+                false,
+            ),
+            "app-support-cache" | "electron" => (Some(vec![CleanCategory::AppSupportCache]), false),
+            "container-cache" | "containers" => (Some(vec![CleanCategory::ContainerCache]), false),
+            "metal-cache" | "metal" => (Some(vec![CleanCategory::MetalShaderCache]), false),
+            "biome" => (Some(vec![CleanCategory::BiomeUsageData]), false),
             other => {
                 anyhow::bail!(
-                        "Unknown category: '{}'. Valid categories: all, dev, xcode, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache",
+                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache, biome (personal data, never included in `all`)",
                         other
                     );
             }
@@ -1661,6 +1674,26 @@ impl App {
             }
         }
 
+        // One native `sudo` prompt up front; each admin command then reuses those
+        // credentials non-interactively (`sudo -n`). If the user declines, or there
+        // is no terminal to prompt on, admin actions are skipped — not failed one
+        // by one with a confusing permission error each.
+        let needs_sudo = runnable.iter().any(|a| a.requires_admin()) && !is_root();
+        let admin_granted = if needs_sudo {
+            println!(
+                "{}",
+                "🔐 Some actions need administrator rights — macOS will ask for your password."
+                    .cyan()
+            );
+            std::process::Command::new("/usr/bin/sudo")
+                .arg("-v")
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        } else {
+            true
+        };
+
         let start_time = Instant::now();
         let mut op_record = OperationRecord::new("maintain", &args.category, false);
         let mut succeeded = 0usize;
@@ -1668,6 +1701,18 @@ impl App {
         let mut skipped = 0usize;
 
         for action in &runnable {
+            if action.requires_admin() && !admin_granted {
+                skipped += 1;
+                op_record.add_item(
+                    action.name().to_string(),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Skipped("administrator authentication was not granted".into()),
+                    None,
+                );
+                continue;
+            }
+
             match action.execute() {
                 Ok(outcome) => {
                     let commands_label = outcome.commands_run.join(" && ");
@@ -1685,7 +1730,9 @@ impl App {
                     }
 
                     let logged_label = match &outcome.output {
-                        Some(output) => format!("{}: {} -> {}", outcome.action_name, commands_label, output),
+                        Some(output) => {
+                            format!("{}: {} -> {}", outcome.action_name, commands_label, output)
+                        }
                         None => format!("{}: {}", outcome.action_name, commands_label),
                     };
                     op_record.add_item(

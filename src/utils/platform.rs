@@ -50,6 +50,18 @@ pub fn available_space_home() -> Option<u64> {
     available_space_for(&home)
 }
 
+/// Whether this process already runs as root (e.g. launched via `sudo cli-ner …`).
+pub fn is_root() -> bool {
+    static IS_ROOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *IS_ROOT.get_or_init(|| {
+        std::process::Command::new("/usr/bin/id")
+            .arg("-u")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+            .unwrap_or(false)
+    })
+}
+
 /// Check if a process matching the given name is currently running.
 pub fn is_process_running(process_name: &str) -> bool {
     let mut sys = System::new();

@@ -222,7 +222,8 @@ execution, so nothing can drift in between.
 
 | Category | Aliases | Targets |
 |---|---|---|
-| `all` | | Everything below (**default**) |
+| `all` | | Everything below except `biome` (**default**) |
+| `app-caches` | `deep` | extended-app-cache + app-support-cache + container-cache + metal-cache |
 | `dev` | `dev-tools`, `developer` | brew + npm + pnpm + pip + gradle + maven + cargo + go |
 | `xcode` | | DerivedData + Archives + DeviceSupport + Simulators |
 | `user-cache` | `cache` | `~/Library/Caches/*` |
@@ -242,9 +243,19 @@ execution, so nothing can drift in between.
 | `xcode-archives` | `archives` | Build archives only |
 | `xcode-device-support` | `device-support` | iOS symbol files only |
 | `xcode-simulator` | `simulator` | CoreSimulator caches + devices with an uninstalled runtime |
+| `extended-app-cache` | `extended-cache` | Downloaded wallpaper/screensaver assets, fontconfig cache |
+| `app-support-cache` | `electron` | Electron/Chromium apps' `~/Library/Application Support/<app>/{Cache, Code Cache, GPUCache, Dawn*Cache, …}` (running apps skipped) |
+| `container-cache` | `containers` | `~/Library/Containers/<app>/Data/Library/Caches` (running apps, Mail and Messages skipped) |
+| `metal-cache` | `metal` | Compiled Metal shaders under `/var/folders` (shared and per-app) |
+| `biome` | | `~/Library/Biome` — **personal data**, never part of `all`; needs Full Disk Access |
 
 Everything CLI-NER removes is **regenerable**: it is re-downloaded or rebuilt on the next build.
-The cost of a mistake is time, never data.
+The cost of a mistake is time, never data. The one exception is `biome`, which must be asked for
+by name: it is the on-device app-usage history macOS uses for suggestions, which start over.
+
+Root-owned system caches (coresymbolicationd, IntlDataCache, print spooler, core dumps) are not in
+`clean`: they live in `cli-ner maintain --allow-admin`, which asks for your password once through
+the native `sudo` prompt.
 
 ### 3. `cli-ner dashboard` (or `cli-ner report --tui`) — Interactive TUI Dashboard
 ```bash
