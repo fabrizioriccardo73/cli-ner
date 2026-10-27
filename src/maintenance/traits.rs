@@ -168,8 +168,23 @@ pub trait MaintenanceAction: Send + Sync {
     /// The exact, ordered list of commands this action runs.
     fn commands(&self) -> Vec<SystemCommand>;
 
-    /// Run `commands()` in order, stopping at the first failure.
+    /// Whether it is currently safe to run this action — e.g. a conflicting
+    /// app has a file open that a command below would touch. Checked right
+    /// before `execute()` runs anything; failing this is not an error, the
+    /// caller gets a `Skipped` outcome back instead.
+    fn preflight(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Run `preflight()`, then `commands()` in order, stopping at the first failure.
     fn execute(&self) -> Result<MaintenanceOutcome> {
+        if let Err(reason) = self.preflight() {
+            return Ok(MaintenanceOutcome {
+                action_name: self.name().to_string(),
+                status: ActionStatus::Skipped(reason),
+                commands_run: Vec::new(),
+            });
+        }
         run_system_commands(self.name(), self.commands())
     }
 }

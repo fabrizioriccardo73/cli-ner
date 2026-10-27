@@ -1564,6 +1564,7 @@ impl App {
             Cell::new("Risk").fg(Color::Yellow),
             Cell::new("Admin?").fg(Color::Red),
             Cell::new("Reversible?").fg(Color::Blue),
+            Cell::new("Status").fg(Color::Green),
             Cell::new("Commands").fg(Color::Magenta),
         ]);
 
@@ -1575,12 +1576,18 @@ impl App {
                 .collect::<Vec<_>>()
                 .join(" && ");
 
+            let status = match action.preflight() {
+                Ok(()) => "ready".green().to_string(),
+                Err(reason) => format!("⚠️ {}", reason).yellow().to_string(),
+            };
+
             table.add_row(Row::from(vec![
                 Cell::new(action.category().identifier()),
                 Cell::new(action.name()),
                 Cell::new(action.risk().label()),
                 Cell::new(if action.requires_admin() { "yes" } else { "no" }),
                 Cell::new(if action.is_reversible() { "yes" } else { "no" }),
+                Cell::new(status),
                 Cell::new(commands),
             ]));
         }
@@ -1655,15 +1662,16 @@ impl App {
         let mut op_record = OperationRecord::new("maintain", &args.category, false);
         let mut succeeded = 0usize;
         let mut failed = 0usize;
+        let mut skipped = 0usize;
 
         for action in &runnable {
             match action.execute() {
                 Ok(outcome) => {
                     let commands_label = outcome.commands_run.join(" && ");
-                    if matches!(outcome.status, ActionStatus::Success) {
-                        succeeded += 1;
-                    } else {
-                        failed += 1;
+                    match &outcome.status {
+                        ActionStatus::Success => succeeded += 1,
+                        ActionStatus::Skipped(_) => skipped += 1,
+                        ActionStatus::Failed(_) => failed += 1,
                     }
                     op_record.add_item(
                         format!("{}: {}", outcome.action_name, commands_label),
@@ -1692,6 +1700,13 @@ impl App {
         println!("\n{}", "🎉 Maintenance run completed.".bold().green());
         println!("--------------------------------------------------");
         println!("✅ Succeeded:        {}", succeeded.to_string().green());
+        if skipped > 0 {
+            println!(
+                "⏭️  Skipped:          {} {}",
+                skipped.to_string().yellow(),
+                "(a safety precondition wasn't met — see Status above)".dimmed()
+            );
+        }
         if failed > 0 {
             println!("⚠️  Failed:           {}", failed.to_string().red());
         }
