@@ -344,19 +344,26 @@ impl App {
             "app-caches" | "deep" => (
                 Some(vec![
                     CleanCategory::ExtendedAppCache,
+                    CleanCategory::BrowserCache,
                     CleanCategory::AppSupportCache,
                     CleanCategory::ContainerCache,
                     CleanCategory::MetalShaderCache,
                 ]),
-                false,
+                true,
             ),
             "app-support-cache" | "electron" => (Some(vec![CleanCategory::AppSupportCache]), false),
             "container-cache" | "containers" => (Some(vec![CleanCategory::ContainerCache]), false),
             "metal-cache" | "metal" => (Some(vec![CleanCategory::MetalShaderCache]), false),
             "biome" => (Some(vec![CleanCategory::BiomeUsageData]), false),
+            "browser-cache" | "browser" | "browsers" => {
+                (Some(vec![CleanCategory::BrowserCache]), true)
+            }
+            "browser-offline-data" | "service-worker-cache" => {
+                (Some(vec![CleanCategory::BrowserOfflineData]), true)
+            }
             other => {
                 anyhow::bail!(
-                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache. Never included in `all`: trash, unavailable-simulators, biome",
+                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache, browser-cache, browser-offline-data. Never included in `all`: trash, unavailable-simulators, biome, browser-offline-data",
                         other
                     );
             }

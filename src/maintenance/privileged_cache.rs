@@ -18,6 +18,7 @@ const SYSTEM_CACHES: &str = "/System/Library/Caches";
 const CUPS_CACHE: &str = "/private/var/spool/cups/cache";
 const CUPS_TMP: &str = "/private/var/spool/cups/tmp";
 const CORES_DIR: &str = "/cores";
+const AERIALS_DIR: &str = "/Library/Application Support/com.apple.idleassetsd/Customer";
 
 fn args(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
@@ -212,6 +213,77 @@ impl MaintenanceAction for CoreDumpsAction {
     }
 }
 
+/// Aerial screen saver / wallpaper videos that macOS downloaded (`root:admin`).
+/// Each 4K video takes hundreds of MB; macOS fetches again only the one that
+/// is actually shown.
+pub struct DownloadedAerialsAction;
+
+impl DownloadedAerialsAction {
+    fn has_downloaded_videos() -> bool {
+        walkdir::WalkDir::new(AERIALS_DIR)
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+            .any(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "mov"))
+    }
+}
+
+impl MaintenanceAction for DownloadedAerialsAction {
+    fn name(&self) -> &'static str {
+        "Remove Downloaded Aerial Videos"
+    }
+
+    fn category(&self) -> ActionCategory {
+        ActionCategory::ExtendedCache
+    }
+
+    fn description(&self) -> &'static str {
+        "Deletes the Aerial screen saver and wallpaper videos (.mov) macOS downloaded into \
+         /Library/Application Support/com.apple.idleassetsd/Customer. The one you use is \
+         downloaded again the next time it is shown; your settings are kept."
+    }
+
+    fn risk(&self) -> RiskLevel {
+        RiskLevel::Low
+    }
+
+    fn requires_admin(&self) -> bool {
+        true
+    }
+
+    fn is_reversible(&self) -> bool {
+        true
+    }
+
+    fn is_available(&self) -> bool {
+        Path::new(FIND_PATH).is_file() && Path::new(AERIALS_DIR).is_dir()
+    }
+
+    fn preflight(&self) -> Result<(), String> {
+        if Self::has_downloaded_videos() {
+            Ok(())
+        } else {
+            Err("no downloaded Aerial videos".into())
+        }
+    }
+
+    fn commands(&self) -> Vec<SystemCommand> {
+        vec![SystemCommand::new(
+            FIND_PATH,
+            args(&[
+                AERIALS_DIR,
+                "-mindepth",
+                "1",
+                "-type",
+                "f",
+                "-name",
+                "*.mov",
+                "-delete",
+            ]),
+        )]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +292,7 @@ mod tests {
         let mut commands = SystemServiceCachesAction.commands();
         commands.extend(CupsSpoolCacheAction.commands());
         commands.extend(CoreDumpsAction.commands());
+        commands.extend(DownloadedAerialsAction.commands());
         commands
     }
 
@@ -233,6 +306,7 @@ mod tests {
             CUPS_CACHE,
             CUPS_TMP,
             CORES_DIR,
+            AERIALS_DIR,
         ];
         for command in all_commands() {
             assert_eq!(command.program, FIND_PATH);
@@ -249,6 +323,16 @@ mod tests {
         assert!(SystemServiceCachesAction.requires_admin());
         assert!(CupsSpoolCacheAction.requires_admin());
         assert!(CoreDumpsAction.requires_admin());
+        assert!(DownloadedAerialsAction.requires_admin());
+    }
+
+    /// Only the videos go: the strings bundle and the folder layout stay.
+    #[test]
+    fn test_aerials_delete_only_video_files() {
+        let command = &DownloadedAerialsAction.commands()[0];
+        let name = command.args.iter().position(|a| a == "-name").unwrap();
+        assert_eq!(command.args[name + 1], "*.mov");
+        assert!(command.args.windows(2).any(|w| w == ["-type", "f"]));
     }
 
     #[test]

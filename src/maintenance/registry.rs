@@ -4,7 +4,7 @@ use crate::maintenance::disk_maintenance::{
 use crate::maintenance::extended_cache::{FontCacheResetAction, QuickLookCacheResetAction};
 use crate::maintenance::heavy_rebuild::{LocateDatabaseRebuildAction, SpotlightRebuildAction};
 use crate::maintenance::privileged_cache::{
-    CoreDumpsAction, CupsSpoolCacheAction, SystemServiceCachesAction,
+    CoreDumpsAction, CupsSpoolCacheAction, DownloadedAerialsAction, SystemServiceCachesAction,
 };
 use crate::maintenance::system_index::{LaunchServicesRebuildAction, MailIndexVacuumAction};
 use crate::maintenance::system_state::{FlushDnsCacheAction, PurgeMemoryAction};
@@ -31,6 +31,7 @@ impl MaintenanceRegistry {
             Box::new(SystemServiceCachesAction),
             Box::new(CupsSpoolCacheAction),
             Box::new(CoreDumpsAction),
+            Box::new(DownloadedAerialsAction),
             Box::new(FlushDnsCacheAction),
             Box::new(PurgeMemoryAction),
             Box::new(SpotlightRebuildAction),
@@ -124,7 +125,7 @@ mod tests {
         assert_eq!(disk_maintenance.len(), 4);
 
         let extended_cache = registry.find_by_category(ActionCategory::ExtendedCache);
-        assert_eq!(extended_cache.len(), 4);
+        assert_eq!(extended_cache.len(), 5);
 
         let system_state = registry.find_by_category(ActionCategory::SystemState);
         assert_eq!(system_state.len(), 2);

@@ -1,4 +1,5 @@
 pub mod app_caches;
+pub mod browser_caches;
 pub mod dev_tools;
 pub mod extended_cache;
 pub mod extra_caches;

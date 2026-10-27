@@ -1,6 +1,7 @@
 use crate::cleaner::app_caches::{
     AppSupportCacheCleaner, BiomeCleaner, ContainerCacheCleaner, MetalShaderCacheCleaner,
 };
+use crate::cleaner::browser_caches::{BrowserCacheCleaner, BrowserOfflineDataCleaner};
 use crate::cleaner::dev_tools::{
     CargoCacheCleaner, DockerCleaner, GradleCacheCleaner, HomebrewCleaner, MavenCacheCleaner,
     NpmCacheCleaner, PipCacheCleaner,
@@ -47,6 +48,12 @@ impl CleanerRegistry {
             Box::new(UnavailableSimulatorsCleaner),
             Box::new(DockerCleaner),
             Box::new(ExtendedAppCacheCleaner),
+            // Before `AppSupportCacheCleaner`: a browser cache folder at the top of
+            // Application Support (`Microsoft Edge/GrShaderCache`) is offered whole
+            // here, and the dedupe in `clean` then drops the generic sweep's
+            // per-file entries inside it instead of counting them twice.
+            Box::new(BrowserCacheCleaner),
+            Box::new(BrowserOfflineDataCleaner),
             Box::new(AppSupportCacheCleaner),
             Box::new(ContainerCacheCleaner),
             Box::new(MetalShaderCacheCleaner),

@@ -1,6 +1,7 @@
 use crate::cleaner::traits::{CleanTargetItem, Cleaner};
 use crate::safety::allowlist::CleanCategory;
 use crate::safety::browser::{get_running_browsers, is_cache_entry_for_running_browser};
+use crate::safety::running_apps::RunningApps;
 use crate::utils::fs::{calculate_size, expand_tilde};
 use anyhow::Result;
 use std::fs;
@@ -17,13 +18,16 @@ impl Cleaner for UserCacheCleaner {
     }
 
     fn description(&self) -> &'static str {
-        "Removes application cache files stored in ~/Library/Caches (excluding protected system items & active running browsers)"
+        "Removes application cache files stored in ~/Library/Caches. Caches of running apps and \
+         browsers are skipped: an app keeps writing into files it has open, so they would \
+         only move to the Trash, and the app may misbehave"
     }
 
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
         let cache_dir = expand_tilde("~/Library/Caches");
         let mut items = Vec::new();
         let running_browsers = get_running_browsers();
+        let running_apps = RunningApps::snapshot();
 
         if cache_dir.is_dir() {
             for entry in fs::read_dir(&cache_dir)?.flatten() {
@@ -31,6 +35,11 @@ impl Cleaner for UserCacheCleaner {
 
                 // If a browser is currently running, skip its cache directory to prevent session corruption
                 if is_cache_entry_for_running_browser(&name, &running_browsers).is_some() {
+                    continue;
+                }
+                // Same for any other running app or daemon (`Code`, `com.spotify.client`,
+                // `com.apple.nsurlsessiond` with its in-flight background downloads, …).
+                if running_apps.owns(&name) {
                     continue;
                 }
 

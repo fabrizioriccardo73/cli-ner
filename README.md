@@ -226,11 +226,11 @@ execution, so nothing can drift in between.
 
 | Category | Aliases | Targets |
 |---|---|---|
-| `all` | | Everything below except `trash`, `unavailable-simulators` and `biome` (**default**) |
-| `app-caches` | `deep` | extended-app-cache + app-support-cache + container-cache + metal-cache |
+| `all` | | Everything below except `trash`, `unavailable-simulators`, `biome` and `browser-offline-data` (**default**) |
+| `app-caches` | `deep` | extended-app-cache + browser-cache + app-support-cache + container-cache + metal-cache |
 | `dev` | `dev-tools`, `developer` | brew + npm + pnpm + pip + gradle + maven + cargo + go |
 | `xcode` | | DerivedData + Archives + DeviceSupport + simulator caches |
-| `user-cache` | `cache` | `~/Library/Caches/*` |
+| `user-cache` | `cache` | `~/Library/Caches/*` — folders of running apps and browsers are skipped |
 | `user-logs` | `logs` | `~/Library/Logs/*` |
 | `temp-files` | `temp` | `/private/tmp`, `/private/var/tmp` (only entries with no change inside for 24h+, no sockets, no lock/pid files) |
 | `trash` | | Empties `~/.Trash` — **always permanent**, never part of `all` |
@@ -252,6 +252,8 @@ execution, so nothing can drift in between.
 | `app-support-cache` | `electron` | Electron/Chromium apps' `~/Library/Application Support/<app>/{Cache, Code Cache, GPUCache, Dawn*Cache, …}` (running apps skipped) |
 | `container-cache` | `containers` | `~/Library/Containers/<app>/Data/Library/Caches` (running apps, Mail and Messages skipped) |
 | `metal-cache` | `metal` | Compiled Metal shaders under `/var/folders` (shared and per-app) |
+| `browser-cache` | `browser`, `browsers` | Code, GPU and shader caches inside every profile of Chrome, Edge, Brave, Arc, Vivaldi, Opera, Dia, Comet and other Chromium browsers (`~/Library/Application Support/<browser>/<profile>/{Code Cache, GPUCache, Dawn*Cache, …}`, plus `GrShaderCache`, `ShaderCache`, `component_crx_cache`, `extensions_crx_cache`), and Tor Browser's cache. Passwords, cookies, history, bookmarks, tabs and extensions are never matched; running browsers are skipped |
+| `browser-offline-data` | `service-worker-cache` | `Service Worker/CacheStorage` of each Chromium profile: files websites saved to work offline — often GBs. **Site data, not a plain cache**: logins and site databases stay, but offline web apps need a connection once. Never part of `all` |
 | `biome` | | `~/Library/Biome` — **personal data**, never part of `all`; needs Full Disk Access |
 
 The categories in `all` hold caches: they are re-downloaded or rebuilt on demand, and most go to
@@ -265,12 +267,14 @@ the Trash first. Two caveats still apply:
   installed by hand (`mvn install`), and a module or git dependency removed upstream cannot be
   fetched again.
 
-Three categories destroy data that is not a cache, so they never run as part of `all` and must
+Four categories hold data that is not a cache, so they never run as part of `all` and must
 be asked for by name: `trash` (whatever is in the Trash), `unavailable-simulators` (simulator
-devices with their apps and data), and `biome` (the on-device app-usage history macOS uses for
-suggestions and, likely, Screen Time).
+devices with their apps and data), `biome` (the on-device app-usage history macOS uses for
+suggestions and, likely, Screen Time) and `browser-offline-data` (what websites stored to work
+offline).
 
-Root-owned system caches (coresymbolicationd, IntlDataCache, print spooler, core dumps) are not in
+Root-owned system caches (coresymbolicationd, IntlDataCache, print spooler, core dumps, downloaded
+Aerial screen saver videos) are not in
 `clean`: they live in `cli-ner maintain --allow-admin`, which asks for your password once through
 the native `sudo` prompt.
 
@@ -437,13 +441,13 @@ local snapshots) are shown as `not measurable` and excluded from the total rathe
 - 📋 **System & ASL Logs**: `/var/log`, `/Library/Logs`, `~/Library/Logs`.
 - 📦 **Dev Package Caches**: Homebrew, Gradle, Maven, npm, pnpm, pip, CocoaPods, Cargo caches.
 
-> ⚠️ **Browser rows are informational only — `clean` never touches them.** `bloat` measures
-> `~/Library/Application Support/<Browser>` (or `~/Library/Safari`), which holds bookmarks,
-> history, saved passwords, cookies, extensions and site storage — real data, not cache. It is
-> intentionally outside the allowlist. The browser's *actual* HTTP cache lives separately under
-> `~/Library/Caches/<Browser>` and **is** covered by `cli-ner clean --category user-cache` (close
-> the browser first). To reclaim the rest, use the browser's own "Clear browsing data" and remove
-> unused profiles — see [the usage guide](docs/GUIDA_UTILIZZO.md#9-browser-cache-vs-dati-personali)
+> ⚠️ **Browser rows measure the whole profile, and `clean` only takes its caches.** `bloat`
+> measures `~/Library/Application Support/<Browser>` (or `~/Library/Safari`), which holds
+> bookmarks, history, saved passwords, cookies, extensions and site storage — real data, not
+> cache, and never in the allowlist. The caches are cleaned with the browser closed:
+> `~/Library/Caches/<Browser>` by `user-cache`, the cache folders inside each profile by
+> `browser-cache`, and websites' offline copies by `browser-offline-data` (by name only). To
+> reclaim the rest, use the browser's own "Clear browsing data" and remove unused profiles — see [the usage guide](docs/GUIDA_UTILIZZO.md#9-browser-cache-vs-dati-personali)
 > for the safe, step-by-step version.
 
 ---
@@ -521,6 +525,7 @@ cli-ner maintain --category system-index --include-heavy --allow-admin --execute
 | `disk-maintenance` | Delete crash core dumps in `/cores` | ✓ | medium |
 | `extended-cache` | Reset user font cache, reset Quick Look cache | | low |
 | `extended-cache` | System service caches, print spooler cache | ✓ | low |
+| `extended-cache` | Downloaded Aerial screen saver/wallpaper videos (re-downloaded when shown) | ✓ | low |
 | `system-state` | Flush DNS cache | ✓ | low |
 | `system-state` | Purge inactive memory (frees RAM, not disk) | ✓ | low |
 

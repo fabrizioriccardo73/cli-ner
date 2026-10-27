@@ -1,3 +1,6 @@
+use crate::safety::browser::{
+    PROFILE_CACHE_LEAVES, SERVICE_WORKER_CACHE, SUPPORTED_BROWSERS, USER_DATA_CACHE_LEAVES,
+};
 use crate::utils::fs::expand_tilde;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
@@ -34,6 +37,8 @@ pub enum CleanCategory {
     ContainerCache,
     MetalShaderCache,
     BiomeUsageData,
+    BrowserCache,
+    BrowserOfflineData,
 }
 
 #[allow(dead_code)]
@@ -73,6 +78,12 @@ impl CleanCategory {
             CleanCategory::BiomeUsageData => {
                 "Biome Usage & Activity Data (personal — explicit only)"
             }
+            CleanCategory::BrowserCache => {
+                "Browser Profile Caches (Chromium profiles in Application Support)"
+            }
+            CleanCategory::BrowserOfflineData => {
+                "Browser Offline Site Data (Service Worker caches — explicit only)"
+            }
         }
     }
 
@@ -101,6 +112,8 @@ impl CleanCategory {
             CleanCategory::ContainerCache => "container-cache",
             CleanCategory::MetalShaderCache => "metal-cache",
             CleanCategory::BiomeUsageData => "biome",
+            CleanCategory::BrowserCache => "browser-cache",
+            CleanCategory::BrowserOfflineData => "browser-offline-data",
         }
     }
 }
@@ -336,6 +349,14 @@ pub const ALLOWED_TARGETS: &[AllowedTarget] = &[
         path_pattern: "{darwin-user-cache}/*/com.apple.metalfe",
         contents_only: true,
     },
+    // Tor Browser keeps its Firefox-style profile caches here instead of in
+    // ~/Library/Caches. Only the `Caches` folder: the profiles next to it hold
+    // bookmarks and settings.
+    AllowedTarget {
+        category: CleanCategory::BrowserCache,
+        path_pattern: "~/Library/Application Support/TorBrowser-Data/Browser/Caches",
+        contents_only: true,
+    },
     // On-device usage and activity history (app usage, Siri suggestions). Not
     // a cache: the cleaner for it only runs when this category is asked for by
     // name, never as part of `--category all`.
@@ -345,6 +366,62 @@ pub const ALLOWED_TARGETS: &[AllowedTarget] = &[
         contents_only: true,
     },
 ];
+
+/// Allowed targets for the caches inside Chromium browser profiles, generated
+/// once from [`SUPPORTED_BROWSERS`] so the browser list lives in one place.
+///
+/// For every Chromium user-data folder this authorizes exactly the cache
+/// folders by name, at the user-data level (`…/Google/Chrome/GrShaderCache`)
+/// and inside one profile (`…/Google/Chrome/*/Code Cache`). The folders are
+/// removed whole (`contents_only: false`): they are leaves the browser
+/// recreates on launch. Everything else in a profile — `Login Data`,
+/// `Cookies`, `History`, `Bookmarks`, `Local Storage`, `IndexedDB`, … — matches
+/// no pattern and stays out of reach.
+fn browser_allowed_targets() -> &'static [AllowedTarget] {
+    static TARGETS: OnceLock<Vec<AllowedTarget>> = OnceLock::new();
+    TARGETS.get_or_init(|| {
+        let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+        let mut targets = Vec::new();
+        let mut push = |category, pattern: String| {
+            targets.push(AllowedTarget {
+                category,
+                path_pattern: leak(pattern),
+                contents_only: false,
+            })
+        };
+
+        for browser in SUPPORTED_BROWSERS {
+            for rel in browser.user_data_dirs {
+                let root = format!("~/Library/Application Support/{rel}");
+                // User-data level. Profile leaves are listed here too because
+                // Opera keeps its single profile in the user-data folder itself.
+                for leaf in USER_DATA_CACHE_LEAVES.iter().chain(PROFILE_CACHE_LEAVES) {
+                    push(CleanCategory::BrowserCache, format!("{root}/{leaf}"));
+                }
+                for leaf in PROFILE_CACHE_LEAVES {
+                    push(CleanCategory::BrowserCache, format!("{root}/*/{leaf}"));
+                }
+                push(
+                    CleanCategory::BrowserOfflineData,
+                    format!("{root}/{SERVICE_WORKER_CACHE}"),
+                );
+                push(
+                    CleanCategory::BrowserOfflineData,
+                    format!("{root}/*/{SERVICE_WORKER_CACHE}"),
+                );
+            }
+        }
+        targets
+    })
+}
+
+/// Every allowed target. The generated browser ones come first because they are
+/// the more specific match: `Microsoft Edge/GrShaderCache` is a whole browser
+/// cache folder, but it also fits the generic `*/GrShaderCache` pattern, which
+/// only authorizes its contents.
+pub fn all_allowed_targets() -> impl Iterator<Item = &'static AllowedTarget> {
+    browser_allowed_targets().iter().chain(ALLOWED_TARGETS)
+}
 
 /// Resolve the per-user `/var/folders/…/C` directory once per process.
 pub fn darwin_user_cache_dir() -> Option<&'static Path> {
@@ -417,7 +494,7 @@ pub fn find_allowed_target<P: AsRef<Path>>(path: P) -> Option<(&'static AllowedT
         path.to_path_buf()
     };
 
-    for target in ALLOWED_TARGETS {
+    for target in all_allowed_targets() {
         let Some(pattern) = expand_pattern(target.path_pattern) else {
             continue;
         };
@@ -456,9 +533,107 @@ mod tests {
 
     #[test]
     fn test_wildcard_does_not_match_deeper_cache_folders() {
-        // A `Cache` nested inside a profile is that profile's business, not ours.
-        let nested = home().join("Library/Application Support/Google/Chrome/Default/Cache/x");
+        // A `Cache` nested inside some app's own subfolder is that app's business.
+        let nested = home().join("Library/Application Support/Slack/Profile/Cache/x");
         assert!(find_allowed_target(&nested).is_none());
+    }
+
+    #[test]
+    fn test_known_browser_profile_caches_are_allowed_whole() {
+        let chrome = home().join("Library/Application Support/Google/Chrome");
+        for (path, category) in [
+            (
+                chrome.join("Default/Code Cache"),
+                CleanCategory::BrowserCache,
+            ),
+            (
+                chrome.join("Profile 1/GPUCache"),
+                CleanCategory::BrowserCache,
+            ),
+            (chrome.join("GrShaderCache"), CleanCategory::BrowserCache),
+            (
+                chrome.join("component_crx_cache"),
+                CleanCategory::BrowserCache,
+            ),
+            (
+                home().join("Library/Application Support/Microsoft Edge/GrShaderCache"),
+                CleanCategory::BrowserCache,
+            ),
+            (
+                home().join("Library/Application Support/com.operasoftware.Opera/Code Cache"),
+                CleanCategory::BrowserCache,
+            ),
+            (
+                chrome.join("Profile 1/Service Worker/CacheStorage"),
+                CleanCategory::BrowserOfflineData,
+            ),
+        ] {
+            let (target, root) = find_allowed_target(&path)
+                .unwrap_or_else(|| panic!("{} must be allowed", path.display()));
+            assert_eq!(target.category, category, "{}", path.display());
+            assert_eq!(root, path);
+            assert!(!target.contents_only);
+        }
+    }
+
+    /// Passwords, cookies, history, bookmarks and site data sit right next to
+    /// the caches; none of them may ever match a pattern.
+    #[test]
+    fn test_browser_personal_data_is_never_allowed() {
+        let support = home().join("Library/Application Support");
+        let profiles = [
+            support.join("Google/Chrome/Default"),
+            support.join("Google/Chrome/Profile 1"),
+            support.join("BraveSoftware/Brave-Browser/Default"),
+            support.join("Microsoft Edge/Default"),
+            support.join("Arc/User Data/Default"),
+            support.join("com.operasoftware.Opera"),
+        ];
+        let personal = [
+            "Login Data",
+            "Login Data-journal",
+            "Cookies",
+            "History",
+            "Bookmarks",
+            "Web Data",
+            "Preferences",
+            "Secure Preferences",
+            "Local Storage/leveldb/000003.log",
+            "IndexedDB/https_example.com_0.indexeddb.leveldb",
+            "Session Storage",
+            "Sessions",
+            "Extensions",
+            "Local Extension Settings",
+            "Service Worker/Database",
+            "Service Worker/ScriptCache",
+            "File System",
+        ];
+        for profile in &profiles {
+            assert!(
+                find_allowed_target(profile).is_none(),
+                "{}",
+                profile.display()
+            );
+            for item in personal {
+                let path = profile.join(item);
+                assert!(
+                    find_allowed_target(&path).is_none(),
+                    "{} must stay protected",
+                    path.display()
+                );
+            }
+        }
+        for item in ["Local State", "Default"] {
+            let path = support.join("Google/Chrome").join(item);
+            assert!(find_allowed_target(&path).is_none(), "{}", path.display());
+        }
+
+        let firefox = support.join("Firefox/Profiles/abcd.default-release");
+        for item in ["logins.json", "key4.db", "places.sqlite", "cookies.sqlite"] {
+            assert!(find_allowed_target(firefox.join(item)).is_none());
+        }
+        let tor = support.join("TorBrowser-Data/Browser/profile.default/places.sqlite");
+        assert!(find_allowed_target(tor).is_none());
     }
 
     #[test]
