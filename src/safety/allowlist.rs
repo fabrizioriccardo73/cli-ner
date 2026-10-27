@@ -21,6 +21,7 @@ pub enum CleanCategory {
     XcodeSimulator,
     Docker,
     Trash,
+    ExtendedAppCache,
 }
 
 #[allow(dead_code)]
@@ -44,6 +45,9 @@ impl CleanCategory {
             CleanCategory::XcodeSimulator => "iOS Simulator Caches & Unavailable Devices",
             CleanCategory::Docker => "Docker Unused Containers & Images",
             CleanCategory::Trash => "macOS Trash",
+            CleanCategory::ExtendedAppCache => {
+                "Extended Application Caches (beyond ~/Library/Caches)"
+            }
         }
     }
 
@@ -66,6 +70,7 @@ impl CleanCategory {
             CleanCategory::XcodeSimulator => "xcode-simulator",
             CleanCategory::Docker => "docker",
             CleanCategory::Trash => "trash",
+            CleanCategory::ExtendedAppCache => "extended-app-cache",
         }
     }
 }

@@ -1,4 +1,5 @@
 pub mod dev_tools;
+pub mod extended_cache;
 pub mod extra_caches;
 pub mod registry;
 pub mod system_cache;
