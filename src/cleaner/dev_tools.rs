@@ -32,6 +32,38 @@ fn parse_docker_reclaimed(stdout: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// The `docker … prune` steps to run for the items the user kept.
+///
+/// Only the selected ones: deselecting "stopped containers" in `--interactive` must
+/// not still delete them. The scan's fallback item (a real path, used when
+/// `docker system df` gave no breakdown) stands for all three.
+fn docker_prunes_for(targets: &[CleanTargetItem]) -> Vec<(&'static str, [&'static str; 3])> {
+    const STEPS: [(&str, &str, [&str; 3]); 3] = [
+        (
+            "docker:build-cache",
+            "docker builder prune -f",
+            ["builder", "prune", "-f"],
+        ),
+        (
+            "docker:dangling-images",
+            "docker image prune -f",
+            ["image", "prune", "-f"],
+        ),
+        (
+            "docker:stopped-containers",
+            "docker container prune -f (⚠️ stopped containers removed)",
+            ["container", "prune", "-f"],
+        ),
+    ];
+
+    let has_fallback = targets.iter().any(|t| t.path.is_absolute());
+    STEPS
+        .into_iter()
+        .filter(|(id, _, _)| has_fallback || targets.iter().any(|t| t.path == Path::new(id)))
+        .map(|(_, label, args)| (label, args))
+        .collect()
+}
+
 pub struct HomebrewCleaner;
 
 impl Cleaner for HomebrewCleaner {
@@ -503,17 +535,8 @@ impl Cleaner for DockerCleaner {
         // ("Total reclaimed space: ..."). That figure is the truth; the `docker system df`
         // estimate gathered during the scan is only an upper bound, because `image prune`
         // touches dangling images while df counts every unused one.
-        let steps = [
-            ("docker builder prune -f", vec!["builder", "prune", "-f"]),
-            ("docker image prune -f", vec!["image", "prune", "-f"]),
-            (
-                "docker container prune -f (⚠️ stopped containers removed)",
-                vec!["container", "prune", "-f"],
-            ),
-        ];
-
-        for (label, args) in steps {
-            match Command::new("docker").args(&args).output() {
+        for (label, args) in docker_prunes_for(targets) {
+            match Command::new("docker").args(args).output() {
                 Ok(output) if output.status.success() => {
                     let reclaimed =
                         parse_docker_reclaimed(&String::from_utf8_lossy(&output.stdout));
@@ -711,6 +734,29 @@ mod tests {
         assert_eq!(parse_docker_reclaimed("Total reclaimed space: 0B\n"), 0);
         // A prune that printed nothing recognisable must claim nothing.
         assert_eq!(parse_docker_reclaimed("nothing to do\n"), 0);
+    }
+
+    fn docker_item(path: &str) -> CleanTargetItem {
+        CleanTargetItem {
+            path: path.into(),
+            size_bytes: 1,
+            file_count: 1,
+            description: String::new(),
+        }
+    }
+
+    /// Deselected Docker items must not be pruned anyway.
+    #[test]
+    fn test_docker_prunes_only_selected_items() {
+        let only_cache = docker_prunes_for(&[docker_item("docker:build-cache")]);
+        assert_eq!(only_cache.len(), 1);
+        assert_eq!(only_cache[0].1, ["builder", "prune", "-f"]);
+
+        assert!(docker_prunes_for(&[]).is_empty());
+
+        let fallback = expand_tilde("~/Library/Containers/com.docker.docker/Data");
+        let all = docker_prunes_for(&[docker_item(fallback.to_str().unwrap())]);
+        assert_eq!(all.len(), 3);
     }
 
     /// External tools decide for themselves what to evict, so the freed figure comes

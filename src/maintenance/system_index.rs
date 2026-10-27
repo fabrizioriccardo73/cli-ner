@@ -1,6 +1,8 @@
 use crate::maintenance::traits::{ActionCategory, MaintenanceAction, RiskLevel, SystemCommand};
 use crate::utils::fs::expand_tilde;
+#[cfg(test)]
 use crate::utils::platform::is_process_running;
+use crate::utils::platform::is_process_running_exact;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -56,25 +58,23 @@ impl MaintenanceAction for LaunchServicesRebuildAction {
 /// Finds Mail.app's envelope index database, whatever its storage-format
 /// version directory happens to be called (`V8`, `V9`, `V10`, …) — that name
 /// changes across macOS releases, so it is never hardcoded.
+///
+/// An upgraded Mac can keep an older `V<n>` folder around next to the live one;
+/// the highest version number is the one Mail actually uses.
 fn find_envelope_index() -> Option<PathBuf> {
     let mail_dir = expand_tilde("~/Library/Mail");
     let entries = fs::read_dir(&mail_dir).ok()?;
 
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let is_version_dir = name.starts_with('V')
-            && name.len() > 1
-            && name[1..].chars().all(|c| c.is_ascii_digit());
-
-        if is_version_dir {
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let version: u32 = name.strip_prefix('V')?.parse().ok()?;
             let candidate = entry.path().join("MailData").join("Envelope Index");
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    None
+            candidate.is_file().then_some((version, candidate))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, path)| path)
 }
 
 /// Compacts Mail.app's envelope index with a SQLite `VACUUM` to reclaim slack
@@ -110,7 +110,9 @@ impl MaintenanceAction for MailIndexVacuumAction {
     }
 
     fn preflight(&self) -> Result<(), String> {
-        if is_process_running("Mail") {
+        // Exact match: a substring check would also hit the `maild` daemon, which
+        // is always running, and block this action forever.
+        if is_process_running_exact("Mail") {
             return Err(
                 "Mail.app is running — close it first so the index file isn't locked.".into(),
             );
@@ -167,7 +169,15 @@ mod tests {
     #[test]
     fn test_mail_vacuum_preflight_matches_running_mail_process() {
         let action = MailIndexVacuumAction;
-        let running = is_process_running("Mail");
+        let running = is_process_running_exact("Mail");
         assert_eq!(action.preflight().is_err(), running);
+    }
+
+    #[test]
+    fn test_mail_check_ignores_the_maild_daemon() {
+        // `maild` runs on every Mac whether Mail.app is open or not.
+        if is_process_running("maild") && !is_process_running_exact("Mail") {
+            assert!(MailIndexVacuumAction.preflight().is_ok());
+        }
     }
 }

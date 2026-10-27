@@ -652,7 +652,11 @@ impl App {
 
         for (cleaner, items, scan_error) in &scanned {
             pb.set_message(format!("Processing {}", cleaner.name()));
-            if scan_error.is_none() {
+            // A cleaner left with no items (all deselected in --interactive, or folded
+            // into a broader category by the dedupe) must not run at all: the
+            // command-based ones (go, brew, pnpm, docker, simctl) would otherwise act
+            // on everything regardless of the empty list.
+            if scan_error.is_none() && !items.is_empty() {
                 // Deliberately `clean_items` and not `clean`: re-scanning here would let
                 // the target set drift from what was previewed, and would make the Trash
                 // cleaner permanently destroy whatever this same run had just trashed.
@@ -1641,7 +1645,16 @@ impl App {
         if is_dry_run {
             println!(
                 "\n💡 To actually run these actions, run:\n   {}",
-                format!("cli-ner maintain --category {} --execute", args.category).cyan()
+                format!(
+                    "cli-ner maintain --category {}{} --execute",
+                    args.category,
+                    if args.allow_admin {
+                        " --allow-admin"
+                    } else {
+                        ""
+                    }
+                )
+                .cyan()
             );
             return Ok(());
         }
@@ -1766,7 +1779,7 @@ impl App {
             println!(
                 "⏭️  Skipped:          {} {}",
                 skipped.to_string().yellow(),
-                "(a safety precondition wasn't met — see Status above)".dimmed()
+                "(a safety precondition wasn't met, or admin rights were not granted)".dimmed()
             );
         }
         if failed > 0 {

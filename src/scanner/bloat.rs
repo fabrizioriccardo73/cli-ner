@@ -171,7 +171,7 @@ pub fn scan_time_machine_snapshots() -> Option<BloatSource> {
         path_or_command: "tmutil listlocalsnapshotdates".to_string(),
         severity: BloatSeverity::Low,
         reclaimable: true,
-        reclaim_hint: "sudo tmutil thinlocalsnapshots / 9999999999 4 (or deletelocalsnapshots <date>)".to_string(),
+        reclaim_hint: "cli-ner maintain --category disk-maintenance --allow-admin --execute (thins expired snapshots only)".to_string(),
         requires_sudo: true,
         size_is_estimate: true,
         details: Some(format!(

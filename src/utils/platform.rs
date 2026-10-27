@@ -62,6 +62,21 @@ pub fn is_root() -> bool {
     })
 }
 
+/// Whether a process whose name is exactly `process_name` (case-insensitive) is running.
+///
+/// Unlike [`is_process_running`], `"Mail"` does not match the always-on `maild`
+/// daemon or `MailCacheDelete`, so a check for an app being open stays accurate.
+pub fn is_process_running_exact(process_name: &str) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All);
+
+    sys.processes().values().any(|p| {
+        p.name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(process_name)
+    })
+}
+
 /// Check if a process matching the given name is currently running.
 pub fn is_process_running(process_name: &str) -> bool {
     let mut sys = System::new();

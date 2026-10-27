@@ -137,14 +137,15 @@ impl MaintenanceAction for ApfsVerifyAction {
     }
 }
 
-/// Thins local Time Machine (APFS) snapshots to reclaim disk space, keeping
-/// the most recent ones rather than deleting every local restore point.
+/// Thins local Time Machine (APFS) snapshots under macOS's own retention policy.
 ///
-/// Not the same as `tmutil deletelocalsnapshots`, which the Catalogo C
-/// analysis deliberately excluded: that removes every local restore point
-/// outright. Thinning only trims older ones under space pressure, so it is
-/// rated `Medium`, not `High` — but it still removes state the user cannot
-/// get back, hence `is_reversible() == false`.
+/// Deliberately run without a purge amount or urgency: `tmutil` then removes
+/// only the snapshots macOS considers expired and would drop by itself anyway,
+/// keeping the recent restore points. Passing a huge amount with urgency 4 (the
+/// common "free everything" recipe) makes it delete every snapshot it can,
+/// which is effectively `tmutil deletelocalsnapshots` — the action the
+/// Catalogo C analysis excluded. It still removes state the user cannot get
+/// back, hence `Medium` risk and `is_reversible() == false`.
 pub struct ThinLocalSnapshotsAction;
 
 impl MaintenanceAction for ThinLocalSnapshotsAction {
@@ -157,9 +158,9 @@ impl MaintenanceAction for ThinLocalSnapshotsAction {
     }
 
     fn description(&self) -> &'static str {
-        "Runs `tmutil thinlocalsnapshots` on the boot volume to reclaim space held by \
-         local APFS snapshots, trimming older ones rather than deleting every restore \
-         point the way `tmutil deletelocalsnapshots` would."
+        "Runs `tmutil thinlocalsnapshots /` with macOS's default policy: removes only \
+         local APFS snapshots that have already expired, keeping recent restore points. \
+         Frees less than deleting every snapshot, but never touches one macOS would keep."
     }
 
     fn risk(&self) -> RiskLevel {
@@ -181,12 +182,8 @@ impl MaintenanceAction for ThinLocalSnapshotsAction {
     fn commands(&self) -> Vec<SystemCommand> {
         vec![SystemCommand::new(
             TMUTIL_PATH,
-            vec![
-                "thinlocalsnapshots".to_string(),
-                "/".to_string(),
-                "999999999999999".to_string(),
-                "4".to_string(),
-            ],
+            // No purge amount / urgency on purpose — see the type's doc comment.
+            vec!["thinlocalsnapshots".to_string(), "/".to_string()],
         )]
     }
 }
@@ -252,6 +249,8 @@ mod tests {
         let action = ThinLocalSnapshotsAction;
         let commands = action.commands();
         assert_eq!(commands.len(), 1);
-        assert!(commands[0].display().contains("thinlocalsnapshots"));
+        // Exactly the mount point: a purge amount + urgency would turn thinning into
+        // deleting every local snapshot.
+        assert_eq!(commands[0].args, ["thinlocalsnapshots", "/"]);
     }
 }
