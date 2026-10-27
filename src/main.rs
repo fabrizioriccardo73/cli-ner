@@ -2,6 +2,7 @@ mod app;
 mod cleaner;
 mod cli;
 mod docker;
+mod maintenance;
 mod projects;
 mod report;
 mod safety;
@@ -40,6 +41,7 @@ fn main() -> Result<()> {
         Commands::Bloat(args) => app.handle_bloat(args)?,
         Commands::Snapshot(args) => app.handle_snapshot(args)?,
         Commands::Diff(args) => app.handle_diff(args)?,
+        Commands::Maintain(args) => app.handle_maintain(args)?,
     }
 
     Ok(())

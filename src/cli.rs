@@ -52,6 +52,10 @@ pub enum Commands {
     /// 📊 Compare disk usage between snapshots or live state to track what consumed space
     #[command(alias = "compare")]
     Diff(DiffArgs),
+
+    /// 🔧 System maintenance actions (index rebuilds, disk housekeeping, …) — distinct
+    /// from `clean`: these run system commands, not path-based cache/trash cleanup
+    Maintain(MaintainArgs),
 }
 
 #[derive(Args, Debug)]
@@ -308,6 +312,27 @@ pub struct SnapshotDeleteArgs {
     /// Delete all saved snapshots
     #[arg(long)]
     pub all: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct MaintainArgs {
+    /// Execute the selected actions for real (default is DRY-RUN preview only)
+    #[arg(long)]
+    pub execute: bool,
+
+    /// Allow actions that require elevated (admin/root) privileges to run.
+    /// Without this flag such actions are always listed but skipped — never
+    /// silently escalated. See docs/MAINTENANCE_ROADMAP.md, "Policy sudo".
+    #[arg(long)]
+    pub allow_admin: bool,
+
+    /// Category to target: all, system-index, extended-cache, disk-maintenance, system-state
+    #[arg(short, long, default_value = "all")]
+    pub category: String,
+
+    /// Non-interactive mode (proceed without confirmation prompt when --execute is passed)
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug, Clone)]

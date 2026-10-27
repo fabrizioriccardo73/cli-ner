@@ -2,9 +2,12 @@ use crate::cleaner::registry::CleanerRegistry;
 use crate::cleaner::traits::{CleanResult, CleanTargetItem, Cleaner};
 use crate::cli::{
     BloatArgs, CleanArgs, DashboardArgs, DiffArgs, DockerArgs, DockerSubcommand, DoctorArgs,
-    OutputFormat, ProjectsArgs, ReportArgs, ScanArgs, SnapshotArgs, SnapshotSubcommand,
+    MaintainArgs, OutputFormat, ProjectsArgs, ReportArgs, ScanArgs, SnapshotArgs,
+    SnapshotSubcommand,
 };
 use crate::docker::{DockerClient, DockerInteractive};
+use crate::maintenance::registry::MaintenanceRegistry;
+use crate::maintenance::traits::{ActionCategory, MaintenanceAction};
 use crate::projects::cleaner::ProjectCleanResult;
 use crate::projects::{
     clean_project_artifacts, prompt_confirm_clean, render_projects_table, scan_projects,
@@ -193,12 +196,14 @@ fn report_project_clean_outcome(result: &ProjectCleanResult) {
 
 pub struct App {
     registry: CleanerRegistry,
+    maintenance_registry: MaintenanceRegistry,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
             registry: CleanerRegistry::new(),
+            maintenance_registry: MaintenanceRegistry::new(),
         }
     }
 
@@ -1463,6 +1468,238 @@ impl App {
                 format!("📸 Saved new current snapshot as '{}'.", snap.id).green()
             );
         }
+
+        Ok(())
+    }
+
+    /// Handle `maintain` command: system maintenance actions (index rebuilds, disk
+    /// housekeeping, …).
+    ///
+    /// Deliberately separate from `clean`: a `MaintenanceAction` runs system commands,
+    /// not path-based cache/trash cleanup, so it has its own preview/confirm/execute
+    /// flow and its own "no root by default" gate. See docs/MAINTENANCE_ROADMAP.md.
+    pub fn handle_maintain(&self, args: MaintainArgs) -> Result<()> {
+        let is_dry_run = !args.execute;
+
+        if is_dry_run {
+            println!(
+                "{}",
+                "ℹ️ DRY-RUN MODE: No command will be executed. Use --execute to apply changes."
+                    .bold()
+                    .yellow()
+            );
+        } else {
+            println!(
+                "{}",
+                "🚀 EXECUTION MODE: Preparing maintenance actions."
+                    .bold()
+                    .green()
+            );
+        }
+
+        let category_filter: Option<ActionCategory> = match args.category.to_lowercase().as_str() {
+            "all" => None,
+            "system-index" => Some(ActionCategory::SystemIndex),
+            "extended-cache" => Some(ActionCategory::ExtendedCache),
+            "disk-maintenance" => Some(ActionCategory::DiskMaintenance),
+            "system-state" => Some(ActionCategory::SystemState),
+            other => {
+                anyhow::bail!(
+                    "Unknown category: '{}'. Valid categories: all, system-index, extended-cache, disk-maintenance, system-state",
+                    other
+                );
+            }
+        };
+
+        let in_category: Vec<&dyn MaintenanceAction> = self
+            .maintenance_registry
+            .all()
+            .iter()
+            .map(|a| a.as_ref())
+            .filter(|a| category_filter.map(|c| a.category() == c).unwrap_or(true))
+            .collect();
+
+        if in_category.is_empty() {
+            println!(
+                "{}",
+                "✨ No maintenance actions are available yet in this build.".green()
+            );
+            println!(
+                "{}",
+                "   They are being ported in phases — see docs/MAINTENANCE_ROADMAP.md for the plan."
+                    .dimmed()
+            );
+            return Ok(());
+        }
+
+        // Actions whose underlying binary/service isn't present on this machine are
+        // reported, never silently dropped.
+        let (available, unavailable): (Vec<_>, Vec<_>) =
+            in_category.into_iter().partition(|a| a.is_available());
+
+        if !unavailable.is_empty() {
+            let names = unavailable
+                .iter()
+                .map(|a| a.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}",
+                format!("⏭️  Not available on this machine: {}", names).dimmed()
+            );
+        }
+
+        if available.is_empty() {
+            println!(
+                "{}",
+                "✨ Nothing to do: every matching action is unavailable on this machine.".green()
+            );
+            return Ok(());
+        }
+
+        let mut table = create_styled_table();
+        table.set_header(vec![
+            Cell::new("Category").fg(Color::Cyan),
+            Cell::new("Action").fg(Color::White),
+            Cell::new("Risk").fg(Color::Yellow),
+            Cell::new("Admin?").fg(Color::Red),
+            Cell::new("Reversible?").fg(Color::Blue),
+            Cell::new("Commands").fg(Color::Magenta),
+        ]);
+
+        for action in &available {
+            let commands = action
+                .commands()
+                .iter()
+                .map(|c| c.display())
+                .collect::<Vec<_>>()
+                .join(" && ");
+
+            table.add_row(Row::from(vec![
+                Cell::new(action.category().identifier()),
+                Cell::new(action.name()),
+                Cell::new(action.risk().label()),
+                Cell::new(if action.requires_admin() { "yes" } else { "no" }),
+                Cell::new(if action.is_reversible() { "yes" } else { "no" }),
+                Cell::new(commands),
+            ]));
+        }
+
+        println!("\n📋 Maintenance Actions:\n{}", table);
+
+        // "No root by default" (same rule `clean` follows): an action needing elevated
+        // privileges never runs unless the caller explicitly opted in.
+        let (runnable, admin_blocked): (Vec<_>, Vec<_>) = available
+            .into_iter()
+            .partition(|a| !a.requires_admin() || args.allow_admin);
+
+        if !admin_blocked.is_empty() {
+            let names = admin_blocked
+                .iter()
+                .map(|a| a.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}",
+                "🔒 SKIPPED (require elevated privileges):".bold().yellow()
+            );
+            println!("   {}", names.white());
+            println!(
+                "{}",
+                "   Re-run with --allow-admin to allow these to prompt for your password.\n".cyan()
+            );
+        }
+
+        if runnable.is_empty() {
+            println!("{}", "Nothing left to do without --allow-admin.".yellow());
+            return Ok(());
+        }
+
+        if is_dry_run {
+            println!(
+                "\n💡 To actually run these actions, run:\n   {}",
+                format!("cli-ner maintain --category {} --execute", args.category).cyan()
+            );
+            return Ok(());
+        }
+
+        let risky_count = runnable
+            .iter()
+            .filter(|a| a.risk().requires_confirmation())
+            .count();
+
+        if !args.yes {
+            let prompt = if risky_count == 0 {
+                format!("Run {} maintenance action(s)?", runnable.len())
+            } else {
+                format!(
+                    "Run {} maintenance action(s), including {} medium/high-risk one(s) listed above?",
+                    runnable.len(),
+                    risky_count
+                )
+            };
+
+            let confirmed = Confirm::new()
+                .with_prompt(prompt)
+                .default(false)
+                .interact()
+                .unwrap_or(false);
+
+            if !confirmed {
+                println!("{}", "❌ Operation cancelled by user.".yellow());
+                return Ok(());
+            }
+        }
+
+        let start_time = Instant::now();
+        let mut op_record = OperationRecord::new("maintain", &args.category, false);
+        let mut succeeded = 0usize;
+        let mut failed = 0usize;
+
+        for action in &runnable {
+            match action.execute() {
+                Ok(outcome) => {
+                    let commands_label = outcome.commands_run.join(" && ");
+                    if matches!(outcome.status, ActionStatus::Success) {
+                        succeeded += 1;
+                    } else {
+                        failed += 1;
+                    }
+                    op_record.add_item(
+                        format!("{}: {}", outcome.action_name, commands_label),
+                        0,
+                        ActionType::ExternalCommand,
+                        outcome.status,
+                        None,
+                    );
+                }
+                Err(e) => {
+                    failed += 1;
+                    op_record.add_item(
+                        action.name().to_string(),
+                        0,
+                        ActionType::ExternalCommand,
+                        ActionStatus::Failed(e.to_string()),
+                        None,
+                    );
+                }
+            }
+        }
+
+        op_record.set_duration(start_time.elapsed());
+        let log_path = save_operation_log(&op_record)?;
+
+        println!("\n{}", "🎉 Maintenance run completed.".bold().green());
+        println!("--------------------------------------------------");
+        println!("✅ Succeeded:        {}", succeeded.to_string().green());
+        if failed > 0 {
+            println!("⚠️  Failed:           {}", failed.to_string().red());
+        }
+        println!(
+            "📝 Audit Log Saved:  {}",
+            log_path.display().to_string().dimmed()
+        );
+        println!("--------------------------------------------------");
 
         Ok(())
     }
