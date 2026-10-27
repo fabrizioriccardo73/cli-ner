@@ -26,6 +26,7 @@ pub enum CleanCategory {
     Go,
     Pnpm,
     XcodeSimulator,
+    XcodeUnavailableSimulators,
     Docker,
     Trash,
     ExtendedAppCache,
@@ -53,7 +54,10 @@ impl CleanCategory {
             CleanCategory::Cargo => "Cargo Registry & Git Caches",
             CleanCategory::Go => "Go Module Cache",
             CleanCategory::Pnpm => "pnpm Content-Addressable Store",
-            CleanCategory::XcodeSimulator => "iOS Simulator Caches & Unavailable Devices",
+            CleanCategory::XcodeSimulator => "iOS Simulator Caches",
+            CleanCategory::XcodeUnavailableSimulators => {
+                "Unavailable iOS Simulator Devices (permanent — explicit only)"
+            }
             CleanCategory::Docker => "Docker Unused Containers & Images",
             CleanCategory::Trash => "macOS Trash",
             CleanCategory::ExtendedAppCache => {
@@ -89,6 +93,7 @@ impl CleanCategory {
             CleanCategory::Go => "go",
             CleanCategory::Pnpm => "pnpm",
             CleanCategory::XcodeSimulator => "xcode-simulator",
+            CleanCategory::XcodeUnavailableSimulators => "unavailable-simulators",
             CleanCategory::Docker => "docker",
             CleanCategory::Trash => "trash",
             CleanCategory::ExtendedAppCache => "extended-app-cache",

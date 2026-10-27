@@ -20,6 +20,16 @@ impl Cleaner for TrashCleaner {
         "Empties files and folders currently in the user's macOS Trash (~/.Trash)"
     }
 
+    /// Emptying the Trash destroys whatever the user put there on purpose, so it
+    /// is never part of `--category all`: it only runs with `--category trash`.
+    fn included_in_default_run(&self) -> bool {
+        false
+    }
+
+    fn deletes_permanently(&self) -> bool {
+        true
+    }
+
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
         let trash_dir = expand_tilde("~/.Trash");
         let mut items = Vec::new();

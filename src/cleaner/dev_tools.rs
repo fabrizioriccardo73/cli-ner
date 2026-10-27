@@ -35,8 +35,8 @@ fn parse_docker_reclaimed(stdout: &str) -> u64 {
 /// The `docker … prune` steps to run for the items the user kept.
 ///
 /// Only the selected ones: deselecting "stopped containers" in `--interactive` must
-/// not still delete them. The scan's fallback item (a real path, used when
-/// `docker system df` gave no breakdown) stands for all three.
+/// not still delete them. Anything that is not one of the three known item ids
+/// prunes nothing.
 fn docker_prunes_for(targets: &[CleanTargetItem]) -> Vec<(&'static str, [&'static str; 3])> {
     const STEPS: [(&str, &str, [&str; 3]); 3] = [
         (
@@ -56,10 +56,9 @@ fn docker_prunes_for(targets: &[CleanTargetItem]) -> Vec<(&'static str, [&'stati
         ),
     ];
 
-    let has_fallback = targets.iter().any(|t| t.path.is_absolute());
     STEPS
         .into_iter()
-        .filter(|(id, _, _)| has_fallback || targets.iter().any(|t| t.path == Path::new(id)))
+        .filter(|(id, _, _)| targets.iter().any(|t| t.path == Path::new(id)))
         .map(|(_, label, args)| (label, args))
         .collect()
 }
@@ -67,6 +66,11 @@ fn docker_prunes_for(targets: &[CleanTargetItem]) -> Vec<(&'static str, [&'stati
 pub struct HomebrewCleaner;
 
 impl Cleaner for HomebrewCleaner {
+    /// Runs an external tool: what it removes never goes through the Trash.
+    fn deletes_permanently(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Homebrew Cache & Unused Packages"
     }
@@ -171,6 +175,11 @@ impl Cleaner for HomebrewCleaner {
 pub struct NpmCacheCleaner;
 
 impl Cleaner for NpmCacheCleaner {
+    /// Runs an external tool: what it removes never goes through the Trash.
+    fn deletes_permanently(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "NPM Global Cache"
     }
@@ -271,6 +280,11 @@ impl Cleaner for NpmCacheCleaner {
 pub struct PipCacheCleaner;
 
 impl Cleaner for PipCacheCleaner {
+    /// Runs an external tool: what it removes never goes through the Trash.
+    fn deletes_permanently(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "PIP Cache"
     }
@@ -420,6 +434,11 @@ fn parse_docker_size_str(s: &str) -> u64 {
 }
 
 impl Cleaner for DockerCleaner {
+    /// Runs an external tool: what it removes never goes through the Trash.
+    fn deletes_permanently(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Docker (Build Cache, Dangling Images & Stopped Containers)"
     }
@@ -493,16 +512,13 @@ impl Cleaner for DockerCleaner {
             }
         }
 
-        // If docker system df returned no granular items, fallback to general container path
+        // No breakdown means we don't know what a prune would remove. Fail closed:
+        // report it as a scan error (shown as "Skipped") instead of guessing, since
+        // guessing here used to mean running every prune, stopped containers included.
         if items.is_empty() {
-            items.push(CleanTargetItem {
-                path: expand_tilde("~/Library/Containers/com.docker.docker/Data"),
-                size_bytes: 0,
-                file_count: 0,
-                description:
-                    "Docker build cache and dangling containers (⚠️ Unmounted container data lost)"
-                        .into(),
-            });
+            anyhow::bail!(
+                "could not read `docker system df` — Docker cleanup skipped, nothing pruned"
+            );
         }
 
         Ok(items)
@@ -754,9 +770,9 @@ mod tests {
 
         assert!(docker_prunes_for(&[]).is_empty());
 
-        let fallback = expand_tilde("~/Library/Containers/com.docker.docker/Data");
-        let all = docker_prunes_for(&[docker_item(fallback.to_str().unwrap())]);
-        assert_eq!(all.len(), 3);
+        // An unknown item (e.g. a real path) must never fan out into every prune.
+        let unknown = expand_tilde("~/Library/Containers/com.docker.docker/Data");
+        assert!(docker_prunes_for(&[docker_item(unknown.to_str().unwrap())]).is_empty());
     }
 
     /// External tools decide for themselves what to evict, so the freed figure comes

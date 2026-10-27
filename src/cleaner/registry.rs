@@ -6,7 +6,9 @@ use crate::cleaner::dev_tools::{
     NpmCacheCleaner, PipCacheCleaner,
 };
 use crate::cleaner::extended_cache::ExtendedAppCacheCleaner;
-use crate::cleaner::extra_caches::{GoModuleCacheCleaner, PnpmStoreCleaner, SimulatorCleaner};
+use crate::cleaner::extra_caches::{
+    GoModuleCacheCleaner, PnpmStoreCleaner, SimulatorCleaner, UnavailableSimulatorsCleaner,
+};
 use crate::cleaner::system_cache::UserCacheCleaner;
 use crate::cleaner::system_logs::UserLogsCleaner;
 use crate::cleaner::temp_files::TempFilesCleaner;
@@ -42,6 +44,7 @@ impl CleanerRegistry {
             Box::new(GoModuleCacheCleaner),
             Box::new(PnpmStoreCleaner),
             Box::new(SimulatorCleaner),
+            Box::new(UnavailableSimulatorsCleaner),
             Box::new(DockerCleaner),
             Box::new(ExtendedAppCacheCleaner),
             Box::new(AppSupportCacheCleaner),

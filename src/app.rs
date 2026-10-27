@@ -333,6 +333,9 @@ impl App {
             "go" | "golang" => (Some(vec![CleanCategory::Go]), false),
             "pnpm" => (Some(vec![CleanCategory::Pnpm]), false),
             "simulator" | "xcode-simulator" => (Some(vec![CleanCategory::XcodeSimulator]), false),
+            "unavailable-simulators" | "simulator-devices" => {
+                (Some(vec![CleanCategory::XcodeUnavailableSimulators]), false)
+            }
             "docker" => (Some(vec![CleanCategory::Docker]), false),
             "trash" => (Some(vec![CleanCategory::Trash]), false),
             "extended-app-cache" | "extended-cache" => {
@@ -353,7 +356,7 @@ impl App {
             "biome" => (Some(vec![CleanCategory::BiomeUsageData]), false),
             other => {
                 anyhow::bail!(
-                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache, biome (personal data, never included in `all`)",
+                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache. Never included in `all`: trash, unavailable-simulators, biome",
                         other
                     );
             }
@@ -405,8 +408,10 @@ impl App {
 
                     let status = if items.is_empty() {
                         "Clean".dimmed()
+                    } else if args.force || cleaner.deletes_permanently() {
+                        "Ready — PERMANENT".red()
                     } else {
-                        "Ready to clean".green()
+                        "Ready (→ Trash)".green()
                     };
 
                     preview_table.add_row(Row::from(vec![
@@ -500,9 +505,23 @@ impl App {
             format_bytes(total_reclaimable).bold().green()
         );
 
-        let has_docker = scanned
+        let mut has_docker = scanned
             .iter()
-            .any(|(c, _, _)| c.category() == CleanCategory::Docker);
+            .any(|(c, items, _)| c.category() == CleanCategory::Docker && !items.is_empty());
+
+        // `--yes` skips the Docker warning below, so a non-interactive `all` run must
+        // not prune containers nobody was asked about. Docker still runs with `--yes`
+        // when it was requested by name (`--category docker`).
+        if args.execute && args.yes && has_docker && category_filter.is_none() {
+            println!(
+                "{}",
+                "🐳 Docker skipped: with --yes it only runs when asked for by name (--category docker --execute --yes).\n"
+                    .yellow()
+            );
+            scanned.retain(|(c, _, _)| c.category() != CleanCategory::Docker);
+            (total_reclaimable, total_items) = sum_targets(&scanned);
+            has_docker = false;
+        }
 
         // Interactive Docker confirmation when executing
         if args.execute && !args.yes && has_docker {
@@ -615,15 +634,49 @@ impl App {
 
         // Confirmation if executing
         if args.execute && !args.yes {
+            // Split what can still be restored from the Trash from what is gone for
+            // good, so a "move to the Trash" prompt never hides a permanent deletion.
+            let permanent: Vec<(&str, u64)> = scanned
+                .iter()
+                .filter(|(c, items, _)| !items.is_empty() && c.deletes_permanently())
+                .map(|(c, items, _)| (c.name(), items.iter().map(|i| i.size_bytes).sum()))
+                .collect();
+            let permanent_bytes: u64 = permanent.iter().map(|(_, b)| b).sum();
+            let trash_bytes = total_reclaimable.saturating_sub(permanent_bytes);
+
+            if !args.force && !permanent.is_empty() {
+                println!(
+                    "{}",
+                    "⚠️  These targets are DELETED PERMANENTLY — they do not go through the Trash:"
+                        .bold()
+                        .red()
+                );
+                for (name, bytes) in &permanent {
+                    println!("   • {} (~{})", name.bold(), format_bytes(*bytes));
+                }
+                println!();
+            }
+
             let prompt = if args.force {
                 format!(
                     "⚠️ DANGER: You selected --force (Permanent deletion). Delete ~{} permanently?",
                     format_bytes(total_reclaimable)
                 )
+            } else if permanent.is_empty() {
+                format!(
+                    "Move ~{} to the Trash? (space is reclaimed once the Trash is emptied)",
+                    format_bytes(trash_bytes)
+                )
+            } else if trash_bytes == 0 {
+                format!(
+                    "PERMANENTLY delete ~{} (listed above, not recoverable)?",
+                    format_bytes(permanent_bytes)
+                )
             } else {
                 format!(
-                    "Move ~{} of caches/temp files to the Trash? (space is reclaimed once the Trash is emptied)",
-                    format_bytes(total_reclaimable)
+                    "Move ~{} to the Trash and PERMANENTLY delete ~{} (listed above)?",
+                    format_bytes(trash_bytes),
+                    format_bytes(permanent_bytes)
                 )
             };
 

@@ -91,6 +91,10 @@ pub fn calculate_size<P: AsRef<Path>>(path: P) -> Result<(u64, usize)> {
 ///
 /// Returns `false` when the timestamp cannot be read, so an unreadable entry is treated
 /// as recent and therefore left in place.
+///
+/// Only looks at the entry itself: for "is anything inside still in use", see
+/// `cleaner::temp_files::is_idle_temp_entry`.
+#[allow(dead_code)]
 pub fn is_older_than<P: AsRef<Path>>(path: P, threshold: Duration) -> bool {
     let path = path.as_ref();
     if let Ok(meta) = fs::symlink_metadata(path) {
@@ -145,36 +149,98 @@ pub fn move_to_trash_silent<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
         .context("Invalid target path file name")?
         .to_string_lossy();
 
-    let mut dest_path = trash_dir.join(file_name.as_ref());
+    // Try the plain name first, then timestamped variants with a counter. Every
+    // attempt is a rename that refuses to replace an existing entry, so two items
+    // with the same name (every Electron app's `GPUCache/index`, say) can never
+    // overwrite one another in the Trash — even within the same millisecond.
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f").to_string();
+    let mut last_err = None;
+    for attempt in 0..1000u32 {
+        let candidate = match attempt {
+            0 => trash_dir.join(file_name.as_ref()),
+            1 => trash_dir.join(format!("{}_{}", file_name, timestamp)),
+            n => trash_dir.join(format!("{}_{}_{}", file_name, timestamp, n)),
+        };
 
-    // If destination already exists in Trash, add a timestamp suffix to prevent collisions
-    if dest_path.exists() {
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S_%3f");
-        let unique_name = format!("{}_{}", file_name, timestamp);
-        dest_path = trash_dir.join(unique_name);
-    }
-
-    // Direct POSIX rename (atomic and 100% silent on the same volume)
-    match fs::rename(path, &dest_path) {
-        Ok(_) => Ok(dest_path),
-        Err(rename_err) => {
-            // Fallback for cross-device filesystems: copy + remove
-            if path.is_dir() {
-                trash::delete(path).with_context(|| {
-                    format!(
-                        "Failed to rename to trash ({}) and fallback failed",
-                        rename_err
-                    )
-                })?;
-                Ok(dest_path)
-            } else {
-                fs::copy(path, &dest_path)
-                    .and_then(|_| fs::remove_file(path))
-                    .with_context(|| format!("Failed to move file to trash: {}", rename_err))?;
-                Ok(dest_path)
+        match rename_no_replace(path, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                last_err = Some((e, candidate));
+                break;
             }
         }
     }
+
+    let Some((rename_err, dest_path)) = last_err else {
+        anyhow::bail!(
+            "Could not find a free name in ~/.Trash for {}",
+            path.display()
+        );
+    };
+
+    // Fallback for cross-device filesystems.
+    if path.is_dir() {
+        // The system Trash picks its own name here (and keeps "Put Back"), so
+        // only the Trash folder itself can be reported.
+        trash::delete(path).with_context(|| {
+            format!(
+                "Failed to rename to trash ({}) and fallback failed",
+                rename_err
+            )
+        })?;
+        Ok(trash_dir)
+    } else {
+        // `create_new` refuses to clobber an entry that appeared in the meantime.
+        let copy_res = fs::File::open(path).and_then(|mut src| {
+            let mut dst = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&dest_path)?;
+            std::io::copy(&mut src, &mut dst)?;
+            dst.sync_all()
+        });
+        copy_res
+            .and_then(|_| fs::remove_file(path))
+            .with_context(|| format!("Failed to move file to trash: {}", rename_err))?;
+        Ok(dest_path)
+    }
+}
+
+/// `rename(2)` that fails with `AlreadyExists` instead of replacing `to`.
+///
+/// On macOS this is `renamex_np(…, RENAME_EXCL)`, which checks and renames in
+/// one atomic step. Elsewhere it falls back to check-then-rename.
+#[cfg(target_os = "macos")]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+
+    extern "C" {
+        fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
+    }
+    const RENAME_EXCL: c_uint = 0x0000_0004;
+
+    let invalid = |_| std::io::Error::from(std::io::ErrorKind::InvalidInput);
+    let from_c = CString::new(from.as_os_str().as_bytes()).map_err(invalid)?;
+    let to_c = CString::new(to.as_os_str().as_bytes()).map_err(invalid)?;
+
+    // SAFETY: both pointers come from live, NUL-terminated CStrings.
+    let rc = unsafe { renamex_np(from_c.as_ptr(), to_c.as_ptr(), RENAME_EXCL) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    if fs::symlink_metadata(to).is_ok() {
+        return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+    }
+    fs::rename(from, to)
 }
 
 #[cfg(test)]
@@ -247,6 +313,30 @@ mod tests {
             "every file must be counted, none silently skipped"
         );
         assert!(size > 0, "sizes inside these directories must be measured");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Moving into the Trash must never replace an item already there.
+    #[test]
+    fn test_rename_no_replace_refuses_to_overwrite() {
+        let root = std::env::temp_dir().join("test_cli_ner_rename_excl");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let incoming = root.join("index");
+        let existing = root.join("index-already-trashed");
+        fs::write(&incoming, b"new").unwrap();
+        fs::write(&existing, b"keep me").unwrap();
+
+        let err = rename_no_replace(&incoming, &existing).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&existing).unwrap(), b"keep me");
+        assert!(incoming.exists(), "the source must stay put when refused");
+
+        let free = root.join("index-free");
+        rename_no_replace(&incoming, &free).unwrap();
+        assert_eq!(fs::read(&free).unwrap(), b"new");
 
         let _ = fs::remove_dir_all(&root);
     }

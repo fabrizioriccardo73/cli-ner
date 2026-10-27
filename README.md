@@ -85,12 +85,12 @@ cargo install --path .
 ## 🌟 Key Features
 
 - 🛡️ **Safety-First & Reversible by Default**:
-  - Moves files to **macOS Trash** (`~/.Trash`) instead of permanently deleting them.
+  - Moves files to **macOS Trash** (`~/.Trash`) instead of permanently deleting them. The exceptions — targets cleaned by an external tool (`brew`, `npm`, `pip`, `pnpm`, `go`, `docker`) — are marked `PERMANENT` in the preview and listed separately in the confirmation prompt.
   - **Active Browser Protection**: Automatically detects running browsers (Chrome, Safari, Firefox, Brave, Edge, Arc, etc.) and safely **excludes** their cache folders to prevent corrupted tabs, broken CSS/JS, or extension errors.
   - **Dry-Run Mode enabled by default**: see exactly what would be cleaned and how much space would be reclaimed before performing any action.
   - **Strict Blocklist**: Critical system directories (`/System`, `/usr`, `/bin`, etc.) and personal user data (`~/Documents`, `~/Desktop`, `~/.ssh`, `~/Library/Mail`, `~/Library/Keychains`, etc.) are **NEVER** touched.
   - **Controlled Allowlist**: Cleans only explicitly authorized safe targets (`~/Library/Caches/*`, `~/Library/Logs/*`, `/tmp/*`, developer caches) without ever deleting root folders.
-  - **In-use temp files are left alone**: entries in `/private/tmp` and `/private/var/tmp` are only eligible once untouched for 24 hours, so scratch files and sockets belonging to running processes are never pulled out from under them.
+  - **In-use temp files are left alone**: an entry in `/private/tmp` or `/private/var/tmp` is only eligible when *nothing inside it* changed for 24 hours and it holds no socket and no `.lock`/`.pid` file, so data belonging to running processes is not pulled out from under them.
 - 📏 **Numbers You Can Trust**:
   - **"Moved to Trash" and "deleted" are reported separately.** A move to `~/.Trash` frees nothing until the Trash is emptied, and cli-ner says so instead of counting it as reclaimed space.
   - **The real disk delta is measured** before and after an execution and printed alongside the logical totals.
@@ -191,7 +191,8 @@ cli-ner scan --format json
 # Dry-run (DEFAULT): Preview what will be cleaned WITHOUT modifying any files
 cli-ner clean
 
-# Execute actual cleanup (moves files to macOS Trash)
+# Execute actual cleanup (moves files to macOS Trash; targets cleaned by external tools —
+# brew, npm, pip, pnpm, go, docker — are permanent and listed apart in the prompt)
 cli-ner clean --execute
 
 # Pick item by item from a checklist (nothing is pre-selected)
@@ -204,13 +205,16 @@ cli-ner clean --category xcode --execute
 cli-ner clean --category docker --execute
 cli-ner clean --category dev --execute
 
-# Skip the confirmation prompt (for scripts)
+# Skip the confirmation prompt (for scripts). With --yes, Docker only runs when named:
+# `--category all --yes` skips it, `--category docker --yes` prunes.
 cli-ner clean --category npm --execute --yes
 
 # Permanent deletion (requires explicit flag and confirmation)
 cli-ner clean --execute --force
 
-# Empty the Trash — this is what actually returns the space to the volume
+# Empty the Trash — this is what actually returns the space to the volume.
+# Never part of `all`: it permanently deletes everything in the Trash, including
+# what you put there yourself.
 cli-ner clean --category trash --execute
 ```
 
@@ -222,15 +226,15 @@ execution, so nothing can drift in between.
 
 | Category | Aliases | Targets |
 |---|---|---|
-| `all` | | Everything below except `biome` (**default**) |
+| `all` | | Everything below except `trash`, `unavailable-simulators` and `biome` (**default**) |
 | `app-caches` | `deep` | extended-app-cache + app-support-cache + container-cache + metal-cache |
 | `dev` | `dev-tools`, `developer` | brew + npm + pnpm + pip + gradle + maven + cargo + go |
-| `xcode` | | DerivedData + Archives + DeviceSupport + Simulators |
+| `xcode` | | DerivedData + Archives + DeviceSupport + simulator caches |
 | `user-cache` | `cache` | `~/Library/Caches/*` |
 | `user-logs` | `logs` | `~/Library/Logs/*` |
-| `temp-files` | `temp` | `/private/tmp`, `/private/var/tmp` (only entries idle for 24h+) |
-| `trash` | | Empties `~/.Trash` — **always permanent** |
-| `docker` | | Build cache + dangling images + stopped containers |
+| `temp-files` | `temp` | `/private/tmp`, `/private/var/tmp` (only entries with no change inside for 24h+, no sockets, no lock/pid files) |
+| `trash` | | Empties `~/.Trash` — **always permanent**, never part of `all` |
+| `docker` | | Build cache + dangling images + stopped containers — **permanent**; with `--yes` only when named |
 | `brew` | `homebrew` | `brew cleanup -s` + `brew autoremove` |
 | `npm` | | `npm cache clean --force` |
 | `pnpm` | | `pnpm store prune` |
@@ -242,16 +246,29 @@ execution, so nothing can drift in between.
 | `xcode-derived-data` | | DerivedData only |
 | `xcode-archives` | `archives` | Build archives only |
 | `xcode-device-support` | `device-support` | iOS symbol files only |
-| `xcode-simulator` | `simulator` | CoreSimulator caches + devices with an uninstalled runtime |
+| `xcode-simulator` | `simulator` | CoreSimulator caches only (devices are never touched) |
+| `unavailable-simulators` | `simulator-devices` | Simulator devices whose runtime is not installed, one item each — **permanent** (apps and data gone; reinstalling the runtime would have brought them back), never part of `all` |
 | `extended-app-cache` | `extended-cache` | Downloaded wallpaper/screensaver assets, fontconfig cache |
 | `app-support-cache` | `electron` | Electron/Chromium apps' `~/Library/Application Support/<app>/{Cache, Code Cache, GPUCache, Dawn*Cache, …}` (running apps skipped) |
 | `container-cache` | `containers` | `~/Library/Containers/<app>/Data/Library/Caches` (running apps, Mail and Messages skipped) |
 | `metal-cache` | `metal` | Compiled Metal shaders under `/var/folders` (shared and per-app) |
 | `biome` | | `~/Library/Biome` — **personal data**, never part of `all`; needs Full Disk Access |
 
-Everything CLI-NER removes is **regenerable**: it is re-downloaded or rebuilt on the next build.
-The cost of a mistake is time, never data. The one exception is `biome`, which must be asked for
-by name: it is the on-device app-usage history macOS uses for suggestions, which start over.
+The categories in `all` hold caches: they are re-downloaded or rebuilt on demand, and most go to
+the Trash first. Two caveats still apply:
+
+- **Some of them are permanent.** `brew`, `npm`, `pip`, `pnpm`, `go` and `docker` delete through
+  their own tool, so nothing reaches the Trash. They are marked `PERMANENT` in the preview and
+  listed apart in the confirmation prompt. `docker` removes stopped containers, and any data in
+  them that is not in a volume.
+- **"Regenerable" assumes the source still exists.** `~/.m2/repository` can hold artifacts you
+  installed by hand (`mvn install`), and a module or git dependency removed upstream cannot be
+  fetched again.
+
+Three categories destroy data that is not a cache, so they never run as part of `all` and must
+be asked for by name: `trash` (whatever is in the Trash), `unavailable-simulators` (simulator
+devices with their apps and data), and `biome` (the on-device app-usage history macOS uses for
+suggestions and, likely, Screen Time).
 
 Root-owned system caches (coresymbolicationd, IntlDataCache, print spooler, core dumps) are not in
 `clean`: they live in `cli-ner maintain --allow-admin`, which asks for your password once through
@@ -407,8 +424,8 @@ as a whole *and* broken down per package manager. Nested locations are counted *
 headline figure is not the naive sum of the rows. Rows whose size macOS cannot report (APFS
 local snapshots) are shown as `not measurable` and excluded from the total rather than guessed at.
 
-`--system` only *reports* privileged locations along with the `sudo` command to reclaim them.
-CLI-NER never runs anything as root.
+`--system` only *reports* privileged locations along with the `sudo` command to reclaim them;
+`bloat` never runs anything as root.
 
 **What it detects**:
 - 🕐 **Time Machine Local Snapshots**: APFS snapshots locking freed blocks.
@@ -525,7 +542,7 @@ cli-ner maintain --category system-index --include-heavy --allow-admin --execute
 |---|---|---|---|
 | **Preview** | Measures and shows, touches nothing | *default* | — |
 | **Trash** | Moves to `~/.Trash` | `--execute` | ✅ until you empty it |
-| **Permanent** | Actually deletes | `--execute --force` | ❌ **no** |
+| **Permanent** | Actually deletes | `--execute --force`, the `trash` / `unavailable-simulators` categories, and external-tool targets (`brew`, `npm`, `pip`, `pnpm`, `go`, `docker`) | ❌ **no** |
 
 ### Validation pipeline
 
@@ -540,10 +557,11 @@ Every candidate passes these checks before anything happens to it:
 ### Contextual protections
 
 - **Running browsers**: cache folders belonging to a browser that is open right now are excluded automatically, so sessions, tabs and extension state cannot be corrupted. Close the browser and re-run to reclaim them too.
-- **In-use temp files**: entries in `/private/tmp` and `/private/var/tmp` become eligible only after 24 hours of inactivity — scratch files, sockets and locks held by live processes are never pulled out from under them.
-- **Emptying the Trash acts only on the pre-scanned list** and refuses anything that is not a direct child of `~/.Trash`. A `--category all` run therefore cannot permanently destroy the caches it had just moved there for safekeeping.
-- **Docker gets its own confirmation** in execute mode, because data in containers that are not backed by a persistent volume is lost for good.
-- **No privilege escalation**: CLI-NER never runs as root. Locations that need `sudo` are only reported by `bloat --system`, together with the command to run yourself.
+- **In-use temp files**: an entry in `/private/tmp` or `/private/var/tmp` becomes eligible only when nothing anywhere inside it changed for 24 hours (ctime, which cannot be backdated). Entries holding a socket or a `.lock`/`.pid` file are always kept, because their timestamps only say when a still-running server started.
+- **Emptying the Trash is explicit only** (`--category trash`), acts only on the pre-scanned list, and refuses anything that is not a direct child of `~/.Trash`. It never runs as part of `all`.
+- **Nothing in the Trash is ever overwritten.** Items with the same name get a timestamped name, and the move uses an atomic no-replace rename (`renamex_np` with `RENAME_EXCL`).
+- **Docker gets its own confirmation** in execute mode, because data in containers that are not backed by a persistent volume is lost for good. `--yes` skips that confirmation, so with `--yes` Docker runs only when asked for by name (`--category docker`). If `docker system df` cannot be read, nothing is pruned.
+- **No silent privilege escalation**: `clean` never runs as root. Only `cli-ner maintain --allow-admin` runs admin commands, through the native `sudo` prompt (CLI-NER never sees the password). Without that flag, admin actions are listed and skipped.
 
 ### Restoring
 

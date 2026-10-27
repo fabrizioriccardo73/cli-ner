@@ -91,6 +91,13 @@ pub trait Cleaner: Send + Sync {
         true
     }
 
+    /// Whether this cleaner removes data for good even without `--force`: it runs
+    /// an external tool (brew, npm, docker, …) or empties the Trash, so nothing
+    /// lands in `~/.Trash` to restore. The confirmation prompt lists these apart.
+    fn deletes_permanently(&self) -> bool {
+        false
+    }
+
     /// Scan target paths to estimate reclaimable space
     fn scan(&self) -> Result<Vec<CleanTargetItem>>;
 

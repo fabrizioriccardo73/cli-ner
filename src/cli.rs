@@ -89,7 +89,8 @@ pub struct CleanArgs {
 
     /// Category to target: all, dev, xcode, app-caches, user-cache, user-logs, temp-files,
     /// trash, docker, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-simulator,
-    /// app-support-cache, container-cache, metal-cache, biome (never part of `all`), …
+    /// app-support-cache, container-cache, metal-cache. Never part of `all` (ask by name):
+    /// trash, unavailable-simulators, biome
     #[arg(short, long, default_value = "all")]
     pub category: String,
 
