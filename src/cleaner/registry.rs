@@ -2,6 +2,7 @@ use crate::cleaner::dev_tools::{
     CargoCacheCleaner, DockerCleaner, GradleCacheCleaner, HomebrewCleaner, MavenCacheCleaner,
     NpmCacheCleaner, PipCacheCleaner,
 };
+use crate::cleaner::extended_cache::ExtendedAppCacheCleaner;
 use crate::cleaner::extra_caches::{GoModuleCacheCleaner, PnpmStoreCleaner, SimulatorCleaner};
 use crate::cleaner::system_cache::UserCacheCleaner;
 use crate::cleaner::system_logs::UserLogsCleaner;
@@ -39,6 +40,7 @@ impl CleanerRegistry {
             Box::new(PnpmStoreCleaner),
             Box::new(SimulatorCleaner),
             Box::new(DockerCleaner),
+            Box::new(ExtendedAppCacheCleaner),
             Box::new(TrashCleaner),
         ];
 

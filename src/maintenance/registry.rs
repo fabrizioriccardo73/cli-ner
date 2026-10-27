@@ -1,14 +1,15 @@
 use crate::maintenance::disk_maintenance::{
     ApfsVerifyAction, SmartStatusCheckAction, ThinLocalSnapshotsAction,
 };
+use crate::maintenance::extended_cache::{FontCacheResetAction, QuickLookCacheResetAction};
 use crate::maintenance::system_index::{LaunchServicesRebuildAction, MailIndexVacuumAction};
 use crate::maintenance::traits::{ActionCategory, MaintenanceAction};
 
 /// Registry of all available maintenance actions.
 ///
-/// Fase M1 (System Index rebuilds) and Fase M2 (disk/Time Machine
-/// maintenance) are in — see `docs/MAINTENANCE_ROADMAP.md`. Extended caches
-/// and system-state actions land category by category next.
+/// Fase M1 (System Index rebuilds), Fase M2 (disk/Time Machine maintenance)
+/// and Fase M3 (command-based extended caches) are in — see
+/// `docs/MAINTENANCE_ROADMAP.md`. System-state actions land next.
 pub struct MaintenanceRegistry {
     actions: Vec<Box<dyn MaintenanceAction>>,
 }
@@ -21,6 +22,8 @@ impl MaintenanceRegistry {
             Box::new(SmartStatusCheckAction),
             Box::new(ApfsVerifyAction),
             Box::new(ThinLocalSnapshotsAction),
+            Box::new(FontCacheResetAction),
+            Box::new(QuickLookCacheResetAction),
         ];
 
         Self { actions }
@@ -69,6 +72,14 @@ mod tests {
     }
 
     #[test]
+    fn test_registry_has_the_fase_m3_extended_cache_actions() {
+        let registry = MaintenanceRegistry::new();
+        let names: Vec<&str> = registry.all().iter().map(|a| a.name()).collect();
+        assert!(names.contains(&"Reset User Font Cache"));
+        assert!(names.contains(&"Reset Quick Look Cache"));
+    }
+
+    #[test]
     fn test_find_by_category_filters_correctly() {
         let registry = MaintenanceRegistry::new();
         let system_index = registry.find_by_category(ActionCategory::SystemIndex);
@@ -76,5 +87,8 @@ mod tests {
 
         let disk_maintenance = registry.find_by_category(ActionCategory::DiskMaintenance);
         assert_eq!(disk_maintenance.len(), 3);
+
+        let extended_cache = registry.find_by_category(ActionCategory::ExtendedCache);
+        assert_eq!(extended_cache.len(), 2);
     }
 }

@@ -335,9 +335,12 @@ impl App {
             "simulator" | "xcode-simulator" => (Some(vec![CleanCategory::XcodeSimulator]), false),
             "docker" => (Some(vec![CleanCategory::Docker]), false),
             "trash" => (Some(vec![CleanCategory::Trash]), false),
+            "extended-app-cache" | "extended-cache" => {
+                (Some(vec![CleanCategory::ExtendedAppCache]), false)
+            }
             other => {
                 anyhow::bail!(
-                        "Unknown category: '{}'. Valid categories: all, dev, xcode, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash",
+                        "Unknown category: '{}'. Valid categories: all, dev, xcode, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache",
                         other
                     );
             }

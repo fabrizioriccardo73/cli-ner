@@ -197,6 +197,19 @@ pub const ALLOWED_TARGETS: &[AllowedTarget] = &[
         path_pattern: "~/Library/Developer/CoreSimulator/Caches",
         contents_only: true,
     },
+    // Downloaded dynamic wallpaper/screensaver assets: re-downloaded on demand,
+    // not reachable from the generic ~/Library/Caches sweep.
+    AllowedTarget {
+        category: CleanCategory::ExtendedAppCache,
+        path_pattern: "~/Library/Application Support/com.apple.mobileAssetDesktop",
+        contents_only: true,
+    },
+    // fontconfig's own cache, under ~/.cache rather than ~/Library/Caches.
+    AllowedTarget {
+        category: CleanCategory::ExtendedAppCache,
+        path_pattern: "~/.cache/fontconfig",
+        contents_only: true,
+    },
 ];
 
 /// Verifies if a given path is within the allowed targets for cleaning.
