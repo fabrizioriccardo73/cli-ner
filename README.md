@@ -475,6 +475,48 @@ cli-ner diff --format json
 
 ---
 
+### 11. `cli-ner maintain` — System Maintenance Actions
+
+Runs macOS system commands that are not "delete a path": index rebuilds, disk checks, DNS flush.
+Same UX as `clean`: **dry-run by default**, `--execute` to act, a confirmation prompt before
+anything runs. Every command is a fixed program with fixed arguments, never a shell string.
+
+```bash
+# Preview every action, with risk, admin need, status and the exact commands
+cli-ner maintain
+
+# Run one category
+cli-ner maintain --category system-state --allow-admin --execute
+
+# Heavy rebuilds (Spotlight, locate): dedicated flag + one prompt each, even with --yes
+cli-ner maintain --category system-index --include-heavy --allow-admin --execute
+```
+
+| Category | Action | Admin | Risk |
+|---|---|---|---|
+| `system-index` | Rebuild LaunchServices database ("Open With" duplicates) | | low |
+| `system-index` | Vacuum Mail envelope index (Mail.app must be closed) | | low |
+| `system-index` | Rebuild Spotlight index (`mdutil -E /`) — **opt-in** | ✓ | medium |
+| `system-index` | Rebuild `locate` database — **opt-in** | ✓ | medium |
+| `disk-maintenance` | SMART status of the boot disk (read-only) | | low |
+| `disk-maintenance` | Verify APFS volume, no changes (`fsck_apfs -n`) | ✓ | low |
+| `disk-maintenance` | Thin expired local Time Machine snapshots | ✓ | medium |
+| `disk-maintenance` | Delete crash core dumps in `/cores` | ✓ | medium |
+| `extended-cache` | Reset user font cache, reset Quick Look cache | | low |
+| `extended-cache` | System service caches, print spooler cache | ✓ | low |
+| `system-state` | Flush DNS cache | ✓ | low |
+| `system-state` | Purge inactive memory (frees RAM, not disk) | ✓ | low |
+
+- **`--allow-admin`**: without it, admin actions are listed but skipped. With it, macOS asks for
+  your password once (`sudo -v`); CLI-NER never sees it.
+- **`--include-heavy`**: Spotlight and `locate` rebuilds are never part of a normal run. Even with
+  the flag, each one asks for its own yes/no, which `--yes` does not skip, so they never run
+  unattended.
+- Medium-risk actions need confirmation unless you pass `--yes`. Every run goes to the same audit
+  log as `clean` (`cli-ner report`).
+
+---
+
 ## 🛡️ Detailed Safety Model
 
 ### Three levels of risk, safest by default
