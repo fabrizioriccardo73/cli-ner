@@ -735,9 +735,10 @@ mod tests {
         // Net change must be exactly -48 GB
         assert_eq!(diff.net_delta_bytes, -48_000_000_000);
 
-        let table = format_diff_table(&diff, 10, 1_000_000);
+        let table = format_diff_table_with_width(&diff, 10, 1_000_000, 120);
         // Top Space Consumer should be ~/Downloads/app.dmg rather than ~/Downloads or ~
-        assert!(table.contains("Top Space Consumer (Grower): ~/Downloads/app.dmg"));
+        assert!(table.contains("Top Space Consumer (Grower):"));
+        assert!(table.contains("~/Downloads/app.dmg"));
     }
 
     #[test]
@@ -803,7 +804,7 @@ mod tests {
         assert_eq!(diff.total_growth_bytes, 6_000_000_000);
         assert_eq!(diff.entries.len(), 2);
 
-        let formatted = format_diff_table(&diff, 10, 100_000_000);
+        let formatted = format_diff_table_with_width(&diff, 10, 100_000_000, 120);
         assert!(formatted.contains("~/Library/Caches/Google"));
         assert!(formatted.contains("~/Downloads/large_video.mov"));
     }
