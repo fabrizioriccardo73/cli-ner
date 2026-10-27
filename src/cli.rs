@@ -83,7 +83,8 @@ pub struct CleanArgs {
     #[arg(long)]
     pub execute: bool,
 
-    /// Specific category to target (e.g., user-cache, dev, temp, trash, docker, all)
+    /// Category to target: all, dev, xcode, user-cache, user-logs, temp-files, trash,
+    /// docker, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-simulator, …
     #[arg(short, long, default_value = "all")]
     pub category: String,
 
@@ -290,9 +291,13 @@ pub struct SnapshotCreateArgs {
     #[arg(short, long)]
     pub path: Option<PathBuf>,
 
-    /// Max scan tree depth (default: 2)
-    #[arg(long, default_value_t = 2)]
-    pub depth: usize,
+    /// Max scan tree depth (defaults to the value given to `snapshot`, or 2)
+    ///
+    /// Left as an `Option` on purpose: the subcommand must be able to tell "not
+    /// supplied" from "supplied a value that happens to equal the default", so the
+    /// parent `snapshot --depth` can be inherited only when this really was omitted.
+    #[arg(long)]
+    pub depth: Option<usize>,
 }
 
 #[derive(Args, Debug, Clone, Default)]

@@ -1,10 +1,11 @@
 use crate::cleaner::registry::CleanerRegistry;
-use crate::cleaner::traits::CleanResult;
+use crate::cleaner::traits::{CleanResult, CleanTargetItem, Cleaner};
 use crate::cli::{
     BloatArgs, CleanArgs, DashboardArgs, DiffArgs, DockerArgs, DockerSubcommand, DoctorArgs,
     OutputFormat, ProjectsArgs, ReportArgs, ScanArgs, SnapshotArgs, SnapshotSubcommand,
 };
 use crate::docker::{DockerClient, DockerInteractive};
+use crate::projects::cleaner::ProjectCleanResult;
 use crate::projects::{
     clean_project_artifacts, prompt_confirm_clean, render_projects_table, scan_projects,
     select_artifacts_interactive, ProjectType, ScannerOptions,
@@ -24,15 +25,171 @@ use crate::tracker::snapshot::{
 use crate::tui::run_dashboard;
 use crate::utils::format::{format_bytes, format_duration, parse_size_to_bytes};
 use crate::utils::fs::{contract_tilde, expand_tilde};
-use crate::utils::platform::get_disk_stats;
+use crate::utils::platform::{available_space_home, get_disk_stats};
 use crate::utils::table::create_styled_table;
 use anyhow::{Context, Result};
 use colored::*;
 use comfy_table::{Cell, Color, Row};
-use dialoguer::Confirm;
+use dialoguer::{Confirm, MultiSelect};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
+
+/// One cleaner plus the targets it found, and the reason it found none if it failed.
+///
+/// Carried around as a unit so the preview, the interactive selection, the confirmation
+/// and the execution all operate on one identical set of items.
+type ScannedTargets<'a> = (&'a Box<dyn Cleaner>, Vec<CleanTargetItem>, Option<String>);
+
+/// Drop targets that sit inside another cleaner's target.
+///
+/// Categories deliberately overlap: `user-cache` sweeps all of `~/Library/Caches`, which
+/// contains the Homebrew and pip caches that their own cleaners also claim. Left alone,
+/// `--category all` would show those bytes twice in the preview, count them twice in the
+/// summary, and have the second cleaner fail on a path the first one already removed.
+///
+/// Registry order decides the winner: the first cleaner to claim a path keeps it. Entries
+/// that are not filesystem paths at all (`docker:build-cache`) can never overlap and are
+/// always kept. Returns how many targets were folded away.
+fn dedupe_overlapping_targets(scanned: &mut [ScannedTargets<'_>]) -> usize {
+    let mut claimed: Vec<PathBuf> = Vec::new();
+    let mut dropped = 0usize;
+
+    for (_, items, _) in scanned.iter_mut() {
+        items.retain(|item| {
+            if !item.path.is_absolute() {
+                return true;
+            }
+            if claimed.iter().any(|owner| item.path.starts_with(owner)) {
+                dropped += 1;
+                return false;
+            }
+            claimed.push(item.path.clone());
+            true
+        });
+    }
+
+    dropped
+}
+
+/// Total bytes and item count still selected across every cleaner.
+fn sum_targets<T>(scanned: &[(T, Vec<CleanTargetItem>, Option<String>)]) -> (u64, usize) {
+    scanned
+        .iter()
+        .fold((0u64, 0usize), |(bytes, count), (_, items, _)| {
+            (
+                bytes + items.iter().map(|i| i.size_bytes).sum::<u64>(),
+                count + items.len(),
+            )
+        })
+}
+
+/// Present every scanned target as a tickable checklist.
+///
+/// Returns, per cleaner (matching the input order), the set of item indices the user kept.
+/// `None` means the user aborted the selection entirely.
+fn select_clean_targets_interactive(
+    scanned: &[ScannedTargets<'_>],
+) -> Result<Option<Vec<HashSet<usize>>>> {
+    // Flatten to a single checklist while remembering where each row came from.
+    let mut origins: Vec<(usize, usize)> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+
+    for (cleaner_idx, (cleaner, items, _)) in scanned.iter().enumerate() {
+        for (item_idx, item) in items.iter().enumerate() {
+            origins.push((cleaner_idx, item_idx));
+            labels.push(format!(
+                "{:>10}  [{}] {}",
+                format_bytes(item.size_bytes),
+                cleaner.category().identifier(),
+                contract_tilde(&item.path)
+            ));
+        }
+    }
+
+    if labels.is_empty() {
+        return Ok(Some(vec![HashSet::new(); scanned.len()]));
+    }
+
+    println!(
+        "{}",
+        "🗂️  Select the items to clean (space toggles, ↑/↓ moves, enter confirms, esc aborts):"
+            .bold()
+            .cyan()
+    );
+
+    // Nothing is pre-ticked: an interactive run must be an explicit opt-in per item.
+    let defaults = vec![false; labels.len()];
+    let selection = MultiSelect::new()
+        .with_prompt("Items to clean")
+        .items(&labels)
+        .defaults(&defaults)
+        .interact_opt();
+
+    let chosen = match selection {
+        Ok(Some(indices)) => indices,
+        // Escape pressed.
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            // No terminal to draw a checklist on (piped input, CI). Refusing here is the
+            // safe answer: silently falling back to "clean everything" would delete far
+            // more than an interactive run was asking for.
+            anyhow::bail!(
+                "--interactive needs a terminal to display the checklist ({e}). \
+                 Re-run without --interactive, or run it from an interactive shell."
+            );
+        }
+    };
+
+    let mut per_cleaner = vec![HashSet::new(); scanned.len()];
+    for flat_idx in chosen {
+        let (cleaner_idx, item_idx) = origins[flat_idx];
+        per_cleaner[cleaner_idx].insert(item_idx);
+    }
+
+    Ok(Some(per_cleaner))
+}
+
+/// Print the outcome of a project sweep, keeping "moved to the Trash" and
+/// "actually gone" as two distinct numbers.
+fn report_project_clean_outcome(result: &ProjectCleanResult) {
+    if result.total_bytes_trashed > 0 {
+        println!(
+            "{}",
+            format!(
+                "✅ Moved {} artifact(s) ({}) to the Trash.",
+                result.items_cleaned,
+                format_bytes(result.total_bytes_trashed).bold()
+            )
+            .green()
+        );
+        println!(
+            "{}",
+            format!(
+                "   ♻️  Still on disk and recoverable from ~/.Trash — empty it to reclaim the {}.",
+                format_bytes(result.total_bytes_trashed)
+            )
+            .cyan()
+        );
+    }
+    if result.total_bytes_freed > 0 {
+        println!(
+            "{}",
+            format!(
+                "✅ Permanently deleted {} of build artifacts.",
+                format_bytes(result.total_bytes_freed).bold()
+            )
+            .green()
+        );
+    }
+    if result.items_failed > 0 {
+        println!(
+            "{}",
+            format!("⚠️ {} artifact(s) failed to clean.", result.items_failed).yellow()
+        );
+    }
+}
 
 pub struct App {
     registry: CleanerRegistry,
@@ -132,50 +289,84 @@ impl App {
         let dev_categories = vec![
             CleanCategory::Homebrew,
             CleanCategory::Npm,
+            CleanCategory::Pnpm,
             CleanCategory::Pip,
             CleanCategory::Gradle,
             CleanCategory::Maven,
             CleanCategory::Cargo,
+            CleanCategory::Go,
         ];
         let xcode_categories = vec![
             CleanCategory::XcodeDerivedData,
             CleanCategory::XcodeArchives,
             CleanCategory::XcodeDeviceSupport,
+            CleanCategory::XcodeSimulator,
         ];
 
-        let (category_filter, targets_user_cache): (Option<Vec<CleanCategory>>, bool) =
-            match args.category.to_lowercase().as_str() {
-                "all" => (None, true),
-                "user-cache" | "cache" => (Some(vec![CleanCategory::UserCache]), true),
-                "user-logs" | "logs" => (Some(vec![CleanCategory::UserLogs]), false),
-                "temp" | "temp-files" => (Some(vec![CleanCategory::TempFiles]), false),
-                "xcode" => (Some(xcode_categories), false),
-                "xcode-derived-data" => (Some(vec![CleanCategory::XcodeDerivedData]), false),
-                "archives" | "xcode-archives" => (Some(vec![CleanCategory::XcodeArchives]), false),
-                "device-support" | "xcode-device-support" => {
-                    (Some(vec![CleanCategory::XcodeDeviceSupport]), false)
-                }
-                "dev" | "dev-tools" | "developer" => (Some(dev_categories), false),
-                "brew" | "homebrew" => (Some(vec![CleanCategory::Homebrew]), false),
-                "npm" => (Some(vec![CleanCategory::Npm]), false),
-                "pip" => (Some(vec![CleanCategory::Pip]), false),
-                "gradle" => (Some(vec![CleanCategory::Gradle]), false),
-                "maven" => (Some(vec![CleanCategory::Maven]), false),
-                "cargo" => (Some(vec![CleanCategory::Cargo]), false),
-                "docker" => (Some(vec![CleanCategory::Docker]), false),
-                "trash" => (Some(vec![CleanCategory::Trash]), false),
-                other => {
-                    anyhow::bail!(
-                        "Unknown category: '{}'. Valid categories: all, dev, user-cache, user-logs, temp-files, xcode, brew, npm, pip, gradle, maven, cargo, docker, trash",
+        let (category_filter, targets_user_cache): (Option<Vec<CleanCategory>>, bool) = match args
+            .category
+            .to_lowercase()
+            .as_str()
+        {
+            "all" => (None, true),
+            "user-cache" | "cache" => (Some(vec![CleanCategory::UserCache]), true),
+            "user-logs" | "logs" => (Some(vec![CleanCategory::UserLogs]), false),
+            "temp" | "temp-files" => (Some(vec![CleanCategory::TempFiles]), false),
+            "xcode" => (Some(xcode_categories), false),
+            "xcode-derived-data" => (Some(vec![CleanCategory::XcodeDerivedData]), false),
+            "archives" | "xcode-archives" => (Some(vec![CleanCategory::XcodeArchives]), false),
+            "device-support" | "xcode-device-support" => {
+                (Some(vec![CleanCategory::XcodeDeviceSupport]), false)
+            }
+            "dev" | "dev-tools" | "developer" => (Some(dev_categories), false),
+            "brew" | "homebrew" => (Some(vec![CleanCategory::Homebrew]), false),
+            "npm" => (Some(vec![CleanCategory::Npm]), false),
+            "pip" => (Some(vec![CleanCategory::Pip]), false),
+            "gradle" => (Some(vec![CleanCategory::Gradle]), false),
+            "maven" => (Some(vec![CleanCategory::Maven]), false),
+            "cargo" => (Some(vec![CleanCategory::Cargo]), false),
+            "go" | "golang" => (Some(vec![CleanCategory::Go]), false),
+            "pnpm" => (Some(vec![CleanCategory::Pnpm]), false),
+            "simulator" | "xcode-simulator" => (Some(vec![CleanCategory::XcodeSimulator]), false),
+            "docker" => (Some(vec![CleanCategory::Docker]), false),
+            "trash" => (Some(vec![CleanCategory::Trash]), false),
+            other => {
+                anyhow::bail!(
+                        "Unknown category: '{}'. Valid categories: all, dev, xcode, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash",
                         other
                     );
-                }
-            };
+            }
+        };
 
-        // Scan selected targets
-        let mut scanned = self.registry.scan_all(category_filter.as_deref());
-        let mut total_reclaimable = 0u64;
-        let mut total_items = 0usize;
+        // Record the volume's real free space up front. The summary reports the
+        // measured delta rather than the logical size of the targets, because moving
+        // items to the Trash frees nothing until the Trash is emptied.
+        let free_before = available_space_home();
+
+        // Scan selected targets. Cleaners run in parallel and the resulting item lists
+        // are kept: everything below — preview, selection, confirmation and execution —
+        // operates on this exact set, so what the user approves is what gets removed.
+        let mut scanned: Vec<ScannedTargets<'_>> = self
+            .registry
+            .scan_all(category_filter.as_deref())
+            .into_iter()
+            .map(|(cleaner, res)| match res {
+                Ok(items) => (cleaner, items, None),
+                Err(e) => (cleaner, Vec::new(), Some(e.to_string())),
+            })
+            .collect();
+
+        let folded = dedupe_overlapping_targets(&mut scanned);
+        if folded > 0 {
+            println!(
+                "{}",
+                format!(
+                    "ℹ️  {} target(s) are nested inside a broader category and are counted once, not twice.",
+                    folded
+                )
+                .dimmed()
+            );
+        }
 
         let mut preview_table = create_styled_table();
         preview_table.set_header(vec![
@@ -186,12 +377,10 @@ impl App {
             Cell::new("Status").fg(Color::Magenta),
         ]);
 
-        for (cleaner, scan_res) in &scanned {
-            match scan_res {
-                Ok(items) => {
+        for (cleaner, items, scan_error) in &scanned {
+            match scan_error {
+                None => {
                     let cat_size: u64 = items.iter().map(|i| i.size_bytes).sum();
-                    total_reclaimable += cat_size;
-                    total_items += items.len();
 
                     let status = if items.is_empty() {
                         "Clean".dimmed()
@@ -207,7 +396,7 @@ impl App {
                         Cell::new(status.to_string()),
                     ]));
                 }
-                Err(e) => {
+                Some(e) => {
                     preview_table.add_row(Row::from(vec![
                         Cell::new(cleaner.category().identifier()),
                         Cell::new(cleaner.name()),
@@ -217,6 +406,41 @@ impl App {
                     ]));
                 }
             }
+        }
+
+        let (mut total_reclaimable, mut total_items) = sum_targets(&scanned);
+
+        // macOS gates ~/.Trash and a few other locations behind Full Disk Access. Without
+        // it the scan quietly returns "Operation not permitted", so say what that means
+        // rather than leaving the user with an opaque errno.
+        let permission_blocked: Vec<&str> = scanned
+            .iter()
+            .filter(|(_, _, err)| {
+                err.as_deref().is_some_and(|e| {
+                    e.contains("Operation not permitted") || e.contains("os error 1")
+                })
+            })
+            .map(|(cleaner, _, _)| cleaner.name())
+            .collect();
+
+        if !permission_blocked.is_empty() {
+            println!("{}", "🔒 SOME LOCATIONS COULD NOT BE READ:".bold().yellow());
+            println!(
+                "   {} {}",
+                "Blocked by macOS privacy protection:".yellow(),
+                permission_blocked.join(", ").bold().white()
+            );
+            println!(
+                "{}",
+                "   Their contents are excluded from every number below — the real reclaimable"
+                    .yellow()
+            );
+            println!("{}", "   total is higher than what is shown.".yellow());
+            println!(
+                "{}\n",
+                "   💡 Grant Full Disk Access to your terminal in System Settings › Privacy & Security."
+                    .cyan()
+            );
         }
 
         let running_browsers = crate::safety::browser::get_running_browsers();
@@ -257,7 +481,7 @@ impl App {
 
         let has_docker = scanned
             .iter()
-            .any(|(c, _)| c.category() == CleanCategory::Docker);
+            .any(|(c, _, _)| c.category() == CleanCategory::Docker);
 
         // Interactive Docker confirmation when executing
         if args.execute && !args.yes && has_docker {
@@ -300,17 +524,8 @@ impl App {
                     "{}",
                     "ℹ️  Docker cleanup skipped. Continuing cleanup WITHOUT Docker.\n".cyan()
                 );
-                scanned.retain(|(c, _)| c.category() != CleanCategory::Docker);
-
-                // Recalculate totals after excluding Docker
-                total_reclaimable = 0;
-                total_items = 0;
-                for (_, scan_res) in &scanned {
-                    if let Ok(items) = scan_res {
-                        total_reclaimable += items.iter().map(|i| i.size_bytes).sum::<u64>();
-                        total_items += items.len();
-                    }
-                }
+                scanned.retain(|(c, _, _)| c.category() != CleanCategory::Docker);
+                (total_reclaimable, total_items) = sum_targets(&scanned);
             } else {
                 println!("{}", "✅ Docker cleanup included in target list.\n".green());
             }
@@ -343,6 +558,40 @@ impl App {
             return Ok(());
         }
 
+        // Interactive per-item selection: narrow the scanned set down to the exact
+        // entries the user ticked. Applies to dry-runs too, so a selection can be
+        // previewed before committing to it.
+        if args.interactive {
+            match select_clean_targets_interactive(&scanned)? {
+                Some(selection) => {
+                    for (idx, (_, items, _)) in scanned.iter_mut().enumerate() {
+                        let keep = &selection[idx];
+                        let mut cursor = 0usize;
+                        items.retain(|_| {
+                            let selected = keep.contains(&cursor);
+                            cursor += 1;
+                            selected
+                        });
+                    }
+                    (total_reclaimable, total_items) = sum_targets(&scanned);
+
+                    if total_items == 0 {
+                        println!("{}", "❌ No items selected. Nothing to do.".yellow());
+                        return Ok(());
+                    }
+                    println!(
+                        "\n✅ {} item(s) selected, {} to reclaim.\n",
+                        total_items.to_string().bold(),
+                        format_bytes(total_reclaimable).bold().green()
+                    );
+                }
+                None => {
+                    println!("{}", "❌ Selection cancelled by user.".yellow());
+                    return Ok(());
+                }
+            }
+        }
+
         // Confirmation if executing
         if args.execute && !args.yes {
             let prompt = if args.force {
@@ -352,7 +601,7 @@ impl App {
                 )
             } else {
                 format!(
-                    "Proceed to clean ~{} of safe cache/temp files?",
+                    "Move ~{} of caches/temp files to the Trash? (space is reclaimed once the Trash is emptied)",
                     format_bytes(total_reclaimable)
                 )
             };
@@ -380,24 +629,24 @@ impl App {
                 .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")?,
         );
 
-        for (cleaner, scan_res) in scanned {
+        for (cleaner, items, scan_error) in &scanned {
             pb.set_message(format!("Processing {}", cleaner.name()));
-            if scan_res.is_ok() {
-                match cleaner.clean(is_dry_run, args.force) {
+            if scan_error.is_none() {
+                // Deliberately `clean_items` and not `clean`: re-scanning here would let
+                // the target set drift from what was previewed, and would make the Trash
+                // cleaner permanently destroy whatever this same run had just trashed.
+                match cleaner.clean_items(items, is_dry_run, args.force) {
                     Ok(res) => {
-                        overall_result.total_bytes_freed += res.total_bytes_freed;
-                        overall_result.items_cleaned += res.items_cleaned;
-                        overall_result.items_skipped += res.items_skipped;
-                        overall_result.items_failed += res.items_failed;
-
-                        for detail in res.details {
+                        for detail in &res.details {
                             op_record.add_item(
-                                detail.path,
+                                detail.path.clone(),
                                 detail.size_bytes,
-                                detail.action,
-                                detail.status,
+                                detail.action.clone(),
+                                detail.status.clone(),
+                                detail.trashed_to.clone(),
                             );
                         }
+                        overall_result.merge(res);
                     }
                     Err(e) => {
                         op_record.add_item(
@@ -405,6 +654,7 @@ impl App {
                             0,
                             ActionType::DryRun,
                             ActionStatus::Failed(e.to_string()),
+                            None,
                         );
                     }
                 }
@@ -423,13 +673,57 @@ impl App {
         println!("\n{}", "🎉 Operation Completed!".bold().green());
         println!("--------------------------------------------------");
         println!("⏱️  Duration:          {}", format_duration(elapsed));
-        println!(
-            "💾 Total Space Freed: {}",
-            format_bytes(overall_result.total_bytes_freed)
-                .bold()
-                .green()
-        );
+
+        if is_dry_run {
+            println!(
+                "📊 Would reclaim:     {}",
+                format_bytes(overall_result.total_bytes_processed())
+                    .bold()
+                    .green()
+            );
+        } else {
+            if overall_result.total_bytes_trashed > 0 {
+                println!(
+                    "🗑️  Moved to Trash:    {} {}",
+                    format_bytes(overall_result.total_bytes_trashed)
+                        .bold()
+                        .yellow(),
+                    "(still on disk — empty the Trash to reclaim it)".dimmed()
+                );
+            }
+            if overall_result.total_bytes_freed > 0 {
+                println!(
+                    "💥 Deleted for good:  {}",
+                    format_bytes(overall_result.total_bytes_freed)
+                        .bold()
+                        .green()
+                );
+            }
+
+            // Ground truth: what the volume actually reports now.
+            if let (Some(before), Some(after)) = (free_before, available_space_home()) {
+                let delta = after.saturating_sub(before);
+                println!(
+                    "💽 Disk space gained: {} {}",
+                    format_bytes(delta).bold().green(),
+                    format!(
+                        "({} free → {} free, measured)",
+                        format_bytes(before),
+                        format_bytes(after)
+                    )
+                    .dimmed()
+                );
+            }
+        }
+
         println!("📁 Items Processed:   {}", overall_result.items_cleaned);
+        if overall_result.items_skipped > 0 {
+            println!(
+                "⏭️  Items Skipped:     {} {}",
+                overall_result.items_skipped.to_string().yellow(),
+                "(failed a safety check — see the audit log)".dimmed()
+            );
+        }
         if overall_result.items_failed > 0 {
             println!(
                 "⚠️  Items Failed:      {}",
@@ -446,6 +740,19 @@ impl App {
             println!(
                 "\n💡 To actually execute and reclaim this space, run:\n   {}",
                 format!("cli-ner clean --category {} --execute", args.category).cyan()
+            );
+        } else if overall_result.total_bytes_trashed > 0 {
+            println!(
+                "\n♻️  Everything above is recoverable from {} until you empty it.",
+                "~/.Trash".cyan()
+            );
+            println!(
+                "   Run `{}` to see where each item came from and where it now sits.",
+                "cli-ner report --last".cyan()
+            );
+            println!(
+                "   Run `{}` when you are ready to actually reclaim the space.",
+                "cli-ner clean --category trash --execute".cyan()
             );
         }
 
@@ -487,17 +794,23 @@ impl App {
                 println!("Dry Run:       {}", last_op.dry_run);
                 println!("Category:      {}", last_op.category);
                 println!(
-                    "Total Freed:   {}",
+                    "Deleted:       {}",
                     format_bytes(last_op.total_bytes_freed).green()
+                );
+                println!(
+                    "Moved to Trash:{} {}",
+                    format!(" {}", format_bytes(last_op.total_bytes_trashed)).yellow(),
+                    "(recoverable until the Trash is emptied)".dimmed()
                 );
                 println!("Items:         {}", last_op.total_items_count);
 
                 let mut table = create_styled_table();
                 table.set_header(vec![
-                    Cell::new("Item Path").fg(Color::Cyan),
+                    Cell::new("Original Path").fg(Color::Cyan),
                     Cell::new("Size").fg(Color::Green),
                     Cell::new("Action").fg(Color::Yellow),
                     Cell::new("Status").fg(Color::Magenta),
+                    Cell::new("Recover From").fg(Color::Blue),
                 ]);
 
                 for item in &last_op.items {
@@ -512,10 +825,22 @@ impl App {
                         Cell::new(format_bytes(item.size_bytes)).fg(Color::Green),
                         Cell::new(format!("{:?}", item.action)),
                         Cell::new(status_str),
+                        Cell::new(
+                            item.trashed_to
+                                .as_ref()
+                                .map(contract_tilde)
+                                .unwrap_or_else(|| "—".to_string()),
+                        )
+                        .fg(Color::Blue),
                     ]));
                 }
 
                 println!("\nDetailed Items:\n{}", table);
+                if last_op.total_bytes_trashed > 0 {
+                    println!(
+                        "\n♻️  To restore an item, move it back from the \"Recover From\" path to its original path."
+                    );
+                }
             }
             return Ok(());
         }
@@ -526,7 +851,8 @@ impl App {
             Cell::new("Command").fg(Color::White),
             Cell::new("Category").fg(Color::Yellow),
             Cell::new("Mode").fg(Color::Blue),
-            Cell::new("Freed Space").fg(Color::Green),
+            Cell::new("Deleted").fg(Color::Green),
+            Cell::new("To Trash").fg(Color::DarkYellow),
             Cell::new("Items").fg(Color::Magenta),
         ]);
 
@@ -543,6 +869,7 @@ impl App {
                 Cell::new(&op.category),
                 Cell::new(mode.to_string()),
                 Cell::new(format_bytes(op.total_bytes_freed)).fg(Color::Green),
+                Cell::new(format_bytes(op.total_bytes_trashed)).fg(Color::DarkYellow),
                 Cell::new(op.total_items_count.to_string()),
             ]));
         }
@@ -619,7 +946,52 @@ impl App {
         }
         println!("{}\n", tool_table);
 
-        // 3. Browser Status
+        // 3. Filesystem access checks
+        println!("{}", "🔐 Filesystem Access (Full Disk Access):".bold());
+        let access_targets = [
+            ("Trash", "~/.Trash"),
+            ("User Caches", "~/Library/Caches"),
+            ("User Logs", "~/Library/Logs"),
+            ("Developer / Xcode", "~/Library/Developer"),
+        ];
+        let mut access_table = create_styled_table();
+        access_table.set_header(vec![
+            Cell::new("Location").fg(Color::Cyan),
+            Cell::new("Readable").fg(Color::Green),
+        ]);
+        let mut any_blocked = false;
+        for (label, path) in access_targets {
+            let expanded = expand_tilde(path);
+            let status = if !expanded.exists() {
+                "— not present".dimmed().to_string()
+            } else {
+                match std::fs::read_dir(&expanded) {
+                    Ok(_) => "✅ Yes".green().to_string(),
+                    Err(e) => {
+                        any_blocked = true;
+                        format!("❌ No ({})", e).red().to_string()
+                    }
+                }
+            };
+            access_table.add_row(Row::from(vec![Cell::new(label), Cell::new(status)]));
+        }
+        println!("{}", access_table);
+        if any_blocked {
+            println!(
+                "{}",
+                " ⚠️  Blocked locations are silently excluded from scans, so reported totals are lower than reality."
+                    .yellow()
+            );
+            println!(
+                "{}\n",
+                " 💡 Fix: System Settings › Privacy & Security › Full Disk Access → add your terminal app."
+                    .cyan()
+            );
+        } else {
+            println!();
+        }
+
+        // 4. Browser Status
         let running_browsers = crate::safety::browser::get_running_browsers();
         println!("{}", "🌐 Active Web Browsers Status:".bold());
         if running_browsers.is_empty() {
@@ -637,12 +1009,18 @@ impl App {
         }
         println!();
 
-        // 4. Security & Safety Reminder
+        // 5. Security & Safety Reminder
         println!("{}", "🛡️ Safety Guarantees & Protection:".bold());
         println!(" • System Integrity Protection (SIP) respected: protected system paths are never touched.");
         println!(" • Blocklist active: personal files (Documents, Desktop, SSH keys, Mail, Keychain) are blocked.");
         println!(" • Browser Protection active: running browser caches are excluded to prevent tab/extension corruption.");
-        println!(" • Reversible by default: Cleaned items are moved to macOS Trash (~/.Trash).");
+        println!(
+            " • Reversible by default: cleaned items are moved to ~/.Trash, so disk space is only"
+        );
+        println!(
+            "   actually reclaimed once the Trash is emptied — cli-ner reports the two separately."
+        );
+        println!(" • Restore info: the audit log records each item's original path and where it now sits.");
         println!(" • Audit trail: All executions are logged to ~/.cli-ner/logs/\n");
 
         Ok(())
@@ -810,27 +1188,13 @@ impl App {
                     "{}",
                     format!(
                         "✅ [DRY-RUN] Would reclaim {} across {} artifact(s).",
-                        format_bytes(result.total_bytes_freed).bold(),
+                        format_bytes(result.total_bytes_processed()).bold(),
                         result.items_cleaned
                     )
                     .green()
                 );
             } else {
-                println!(
-                    "{}",
-                    format!(
-                        "✅ Successfully cleaned {} artifact(s) and reclaimed {}!",
-                        result.items_cleaned,
-                        format_bytes(result.total_bytes_freed).bold()
-                    )
-                    .green()
-                );
-                if result.items_failed > 0 {
-                    println!(
-                        "{}",
-                        format!("⚠️ {} artifact(s) failed to clean.", result.items_failed).yellow()
-                    );
-                }
+                report_project_clean_outcome(&result);
             }
 
             return Ok(());
@@ -881,21 +1245,7 @@ impl App {
         println!("{}", "🧹 Cleaning dormant project artifacts...".cyan());
         let result = clean_project_artifacts(&targets, false, args.force)?;
 
-        println!(
-            "{}",
-            format!(
-                "✅ Successfully cleaned {} artifact(s) and reclaimed {}!",
-                result.items_cleaned,
-                format_bytes(result.total_bytes_freed).bold()
-            )
-            .green()
-        );
-        if result.items_failed > 0 {
-            println!(
-                "{}",
-                format!("⚠️ {} artifact(s) failed to clean.", result.items_failed).yellow()
-            );
-        }
+        report_project_clean_outcome(&result);
 
         Ok(())
     }
@@ -922,9 +1272,7 @@ impl App {
         } else {
             println!(
                 "{}",
-                "🔬 macOS Phantom Disk Space Bloat Analysis\n"
-                    .bold()
-                    .cyan()
+                "🔬 macOS Phantom Disk Space Bloat Analysis\n".bold().cyan()
             );
             println!("{}", format_bloat_table(&report, min_bytes, args.detailed));
         }
@@ -942,11 +1290,7 @@ impl App {
             Some(SnapshotSubcommand::Create(create_args)) => {
                 let target_path = create_args.path.or(args.path);
                 let label = create_args.name.or(args.name);
-                let depth = if create_args.depth != 3 {
-                    create_args.depth
-                } else {
-                    args.depth
-                };
+                let depth = create_args.depth.unwrap_or(args.depth);
                 self.create_snapshot_interactive(target_path, label, depth)?;
             }
             Some(SnapshotSubcommand::List) => {

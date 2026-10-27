@@ -256,7 +256,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &DashboardApp) {
         .records
         .iter()
         .filter(|r| !r.dry_run)
-        .map(|r| r.total_bytes_freed)
+        .map(|r| r.total_bytes_freed + r.total_bytes_trashed)
         .sum();
     let total_ops = app.records.len();
     let executed_ops = app.records.iter().filter(|r| !r.dry_run).count();
@@ -366,11 +366,9 @@ fn render_operations_tab(f: &mut Frame, area: Rect, app: &mut DashboardApp) {
                     .add_modifier(Modifier::BOLD),
             )
         };
-        let freed_span = if rec.total_bytes_freed > 0 {
-            Span::styled(
-                format_bytes(rec.total_bytes_freed),
-                Style::default().fg(Color::Green),
-            )
+        let row_bytes = rec.total_bytes_freed + rec.total_bytes_trashed;
+        let freed_span = if row_bytes > 0 {
+            Span::styled(format_bytes(row_bytes), Style::default().fg(Color::Green))
         } else {
             Span::raw("0 B")
         };
@@ -468,11 +466,18 @@ fn render_details_tab(f: &mut Frame, area: Rect, app: &mut DashboardApp) {
             ),
         ]),
         Line::from(vec![
-            Span::styled("Space Reclaimed: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Deleted: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format_bytes(current_record.total_bytes_freed),
                 Style::default()
                     .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" │ In Trash: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format_bytes(current_record.total_bytes_trashed),
+                Style::default()
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(" │ Total Items: ", Style::default().fg(Color::DarkGray)),

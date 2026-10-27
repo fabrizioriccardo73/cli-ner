@@ -200,6 +200,7 @@ dependencies = [
  "humansize",
  "indicatif",
  "ratatui",
+ "rayon",
  "serde",
  "serde_json",
  "sysinfo",

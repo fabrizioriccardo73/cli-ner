@@ -2,6 +2,7 @@ use crate::cleaner::dev_tools::{
     CargoCacheCleaner, DockerCleaner, GradleCacheCleaner, HomebrewCleaner, MavenCacheCleaner,
     NpmCacheCleaner, PipCacheCleaner,
 };
+use crate::cleaner::extra_caches::{GoModuleCacheCleaner, PnpmStoreCleaner, SimulatorCleaner};
 use crate::cleaner::system_cache::UserCacheCleaner;
 use crate::cleaner::system_logs::UserLogsCleaner;
 use crate::cleaner::temp_files::TempFilesCleaner;
@@ -12,6 +13,7 @@ use crate::cleaner::xcode::{
 };
 use crate::safety::allowlist::CleanCategory;
 use anyhow::Result;
+use rayon::prelude::*;
 
 pub struct CleanerRegistry {
     cleaners: Vec<Box<dyn Cleaner>>,
@@ -33,6 +35,9 @@ impl CleanerRegistry {
             Box::new(GradleCacheCleaner),
             Box::new(MavenCacheCleaner),
             Box::new(CargoCacheCleaner),
+            Box::new(GoModuleCacheCleaner),
+            Box::new(PnpmStoreCleaner),
+            Box::new(SimulatorCleaner),
             Box::new(DockerCleaner),
             Box::new(TrashCleaner),
         ];
@@ -51,13 +56,18 @@ impl CleanerRegistry {
         self.cleaners.iter().find(|c| c.category() == category)
     }
 
-    /// Scan all or filtered cleaners and return target items grouped by cleaner
+    /// Scan all or filtered cleaners and return target items grouped by cleaner.
+    ///
+    /// Cleaners are scanned in parallel — they touch disjoint directories — but the
+    /// results keep registry order, which matters because the Trash cleaner must stay
+    /// last in the execution sequence.
     #[allow(clippy::borrowed_box, clippy::type_complexity)]
     pub fn scan_all(
         &self,
         category_filter: Option<&[CleanCategory]>,
     ) -> Vec<(&Box<dyn Cleaner>, Result<Vec<CleanTargetItem>>)> {
-        self.cleaners
+        let selected: Vec<&Box<dyn Cleaner>> = self
+            .cleaners
             .iter()
             .filter(|c| {
                 if let Some(cats) = category_filter {
@@ -66,7 +76,8 @@ impl CleanerRegistry {
                     true
                 }
             })
-            .map(|c| (c, c.scan()))
-            .collect()
+            .collect();
+
+        selected.par_iter().map(|c| (*c, c.scan())).collect()
     }
 }

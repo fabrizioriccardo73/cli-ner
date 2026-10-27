@@ -470,7 +470,7 @@ mod tests {
             items: HashMap::new(),
         };
 
-        let formatted = format_snapshots_table_with_width(&[snap.clone()], 120);
+        let formatted = format_snapshots_table_with_width(std::slice::from_ref(&snap), 120);
         assert!(formatted.contains("20260822_120000_test"));
         assert!(formatted.contains("test-label"));
 

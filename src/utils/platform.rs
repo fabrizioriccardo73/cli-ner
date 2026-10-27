@@ -29,6 +29,27 @@ pub fn get_disk_stats() -> Vec<DiskStats> {
         .collect()
 }
 
+/// Free space (in bytes) actually reported by the volume that holds `path`.
+///
+/// This is the ground truth used to tell the user how much space a run *really*
+/// reclaimed, as opposed to the logical size of the files that were touched.
+/// Picks the mount point with the longest match, so `/System/Volumes/Data` wins
+/// over `/` for paths inside the data volume.
+pub fn available_space_for(path: &std::path::Path) -> Option<u64> {
+    let disks = Disks::new_with_refreshed_list();
+    disks
+        .iter()
+        .filter(|d| path.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| d.available_space())
+}
+
+/// Free space on the volume holding the user's home directory.
+pub fn available_space_home() -> Option<u64> {
+    let home = dirs::home_dir()?;
+    available_space_for(&home)
+}
+
 /// Check if a process matching the given name is currently running.
 pub fn is_process_running(process_name: &str) -> bool {
     let mut sys = System::new();

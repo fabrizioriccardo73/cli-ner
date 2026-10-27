@@ -16,6 +16,9 @@ pub enum CleanCategory {
     Gradle,
     Maven,
     Cargo,
+    Go,
+    Pnpm,
+    XcodeSimulator,
     Docker,
     Trash,
 }
@@ -35,7 +38,10 @@ impl CleanCategory {
             CleanCategory::Pip => "PIP Cache",
             CleanCategory::Gradle => "Gradle Dependency Cache",
             CleanCategory::Maven => "Maven Repository Cache",
-            CleanCategory::Cargo => "Cargo Package Cache",
+            CleanCategory::Cargo => "Cargo Registry & Git Caches",
+            CleanCategory::Go => "Go Module Cache",
+            CleanCategory::Pnpm => "pnpm Content-Addressable Store",
+            CleanCategory::XcodeSimulator => "iOS Simulator Caches & Unavailable Devices",
             CleanCategory::Docker => "Docker Unused Containers & Images",
             CleanCategory::Trash => "macOS Trash",
         }
@@ -55,6 +61,9 @@ impl CleanCategory {
             CleanCategory::Gradle => "gradle",
             CleanCategory::Maven => "maven",
             CleanCategory::Cargo => "cargo",
+            CleanCategory::Go => "go",
+            CleanCategory::Pnpm => "pnpm",
+            CleanCategory::XcodeSimulator => "xcode-simulator",
             CleanCategory::Docker => "docker",
             CleanCategory::Trash => "trash",
         }
@@ -145,6 +154,42 @@ pub const ALLOWED_TARGETS: &[AllowedTarget] = &[
     AllowedTarget {
         category: CleanCategory::Cargo,
         path_pattern: "~/.cargo/registry/cache",
+        contents_only: true,
+    },
+    // Extracted crate sources: rebuilt from `registry/cache` (or re-downloaded) on the
+    // next build, so removing them costs a decompression, never a re-resolution.
+    AllowedTarget {
+        category: CleanCategory::Cargo,
+        path_pattern: "~/.cargo/registry/src",
+        contents_only: true,
+    },
+    AllowedTarget {
+        category: CleanCategory::Cargo,
+        path_pattern: "~/.cargo/git/checkouts",
+        contents_only: true,
+    },
+    AllowedTarget {
+        category: CleanCategory::Cargo,
+        path_pattern: "~/.cargo/git/db",
+        contents_only: true,
+    },
+    // Downloaded Gradle distributions. Each project pins its own version via the
+    // wrapper, so stale ones pile up and are re-fetched on demand if still needed.
+    AllowedTarget {
+        category: CleanCategory::Gradle,
+        path_pattern: "~/.gradle/wrapper/dists",
+        contents_only: true,
+    },
+    AllowedTarget {
+        category: CleanCategory::Pnpm,
+        path_pattern: "~/Library/pnpm/store",
+        contents_only: true,
+    },
+    // Simulator *caches* only. Device data under CoreSimulator/Devices is never listed
+    // here: it holds installed apps and their databases.
+    AllowedTarget {
+        category: CleanCategory::XcodeSimulator,
+        path_pattern: "~/Library/Developer/CoreSimulator/Caches",
         contents_only: true,
     },
 ];

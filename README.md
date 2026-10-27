@@ -13,6 +13,17 @@
 
 ---
 
+## 📚 Documentation
+
+| Document | What's in it |
+|---|---|
+| **[Usage Guide & Best Practices](docs/GUIDA_UTILIZZO.md)** 🇮🇹 | The recommended routine, how to read the reported numbers, category reference, how to restore trashed items, troubleshooting, and what to automate — and what never to. |
+| [Distribution Guide](docs/DISTRIBUTION_GUIDE.md) | Release, packaging and Homebrew tap workflow. |
+| [Contributing](CONTRIBUTING.md) | Development setup and PR conventions. |
+| [Security Policy](SECURITY.md) | Reporting vulnerabilities. |
+
+---
+
 ## 🚀 Installation & Quick Start
 
 `cli-ner` is designed for macOS (Apple Silicon M1/M2/M3/M4 & Intel).
@@ -79,14 +90,27 @@ cargo install --path .
   - **Dry-Run Mode enabled by default**: see exactly what would be cleaned and how much space would be reclaimed before performing any action.
   - **Strict Blocklist**: Critical system directories (`/System`, `/usr`, `/bin`, etc.) and personal user data (`~/Documents`, `~/Desktop`, `~/.ssh`, `~/Library/Mail`, `~/Library/Keychains`, etc.) are **NEVER** touched.
   - **Controlled Allowlist**: Cleans only explicitly authorized safe targets (`~/Library/Caches/*`, `~/Library/Logs/*`, `/tmp/*`, developer caches) without ever deleting root folders.
+  - **In-use temp files are left alone**: entries in `/private/tmp` and `/private/var/tmp` are only eligible once untouched for 24 hours, so scratch files and sockets belonging to running processes are never pulled out from under them.
+- 📏 **Numbers You Can Trust**:
+  - **"Moved to Trash" and "deleted" are reported separately.** A move to `~/.Trash` frees nothing until the Trash is emptied, and cli-ner says so instead of counting it as reclaimed space.
+  - **The real disk delta is measured** before and after an execution and printed alongside the logical totals.
+  - **Overlapping targets are counted once.** `~/Library/Caches` and the package-manager caches inside it never contribute the same gigabytes twice.
+  - **Sizes are complete.** Nothing is silently skipped while measuring, so the previewed size matches what actually gets removed.
+  - **External tools are re-measured, not assumed.** `brew cleanup`, `npm cache clean`, `pip cache purge` and `docker prune` decide for themselves what to evict; cli-ner reports what actually went, not the size of the directory it hoped to empty.
+  - **Unmeasurable things say so.** APFS local snapshot sizes cannot be queried on macOS, so they are listed as `not measurable` and excluded from totals rather than guessed at.
+  - **Blocked locations are surfaced.** If macOS privacy protection hides a directory, cli-ner tells you the reported total is an undercount and how to fix it.
+- ♻️ **Restorable**: every trashed item's original path *and* its location inside `~/.Trash` are recorded in the audit log — see them with `cli-ner report --last`.
 - ⚡ **High Performance**:
-  - Written in **Rust**, fast and resource-efficient for recursive filesystem scanning and size calculations.
+  - Written in **Rust**, with parallel directory measurement and a single scan per run (the preview you approve is the exact set that gets cleaned).
 - 🛠️ **Developer Tools & Caches Support**:
   - **Homebrew**: `brew cleanup -s`, `brew autoremove`
-  - **Node.js**: `npm` cache (`~/.npm/_cacache`)
+  - **Node.js**: `npm` cache (`~/.npm/_cacache`), **pnpm** store (`pnpm store prune`)
   - **Python**: `pip` cache (`~/Library/Caches/pip`)
+  - **Rust**: `~/.cargo/registry/cache`, extracted sources in `registry/src`, and git dependency checkouts
+  - **Go**: module cache via `go clean -modcache`
+  - **Gradle/Maven**: dependency caches plus stale Gradle wrapper distributions
   - **Docker**: Accurate space detection via `docker system df`, container data loss warnings, build cache, dangling images, and stopped containers.
-  - **Xcode**: DerivedData, Archives, iOS DeviceSupport (with process checks to ensure Xcode is not running).
+  - **Xcode**: DerivedData, Archives, iOS DeviceSupport (with process checks to ensure Xcode is not running), CoreSimulator caches, and simulator devices whose runtime is no longer installed.
 - 📦 **Universal "Project Sweep" & Dormant Project Artifacts**:
   - Automatic detection of software projects across your machine (Rust, Node.js, Python, Gradle, Composer, Go, Flutter).
   - Inactivity and dormancy calculation (via Git commits / source file timestamps, e.g. 60+ days).
@@ -126,10 +150,19 @@ cargo install --path .
    ```bash
    cli-ner clean --execute
    ```
-6. **Explore History & Metrics (TUI Dashboard)**:
+6. **Actually Reclaim the Space** — moving to the Trash frees nothing until it is emptied.
+   Verify everything still works first, then:
+   ```bash
+   cli-ner clean --category trash --execute
+   ```
+7. **Explore History & Metrics (TUI Dashboard)**:
    ```bash
    cli-ner dashboard
    ```
+
+> 📘 **New to CLI-NER?** The [Usage Guide & Best Practices](docs/GUIDA_UTILIZZO.md) (Italian)
+> covers the recommended routine, how to read the reported numbers, how to restore trashed
+> items, and what to automate — and what never to.
 
 ---
 
@@ -161,15 +194,57 @@ cli-ner clean
 # Execute actual cleanup (moves files to macOS Trash)
 cli-ner clean --execute
 
+# Pick item by item from a checklist (nothing is pre-selected)
+cli-ner clean --interactive
+cli-ner clean --interactive --execute
+
 # Target a specific category
 cli-ner clean --category user-cache --execute
 cli-ner clean --category xcode --execute
 cli-ner clean --category docker --execute
 cli-ner clean --category dev --execute
 
+# Skip the confirmation prompt (for scripts)
+cli-ner clean --category npm --execute --yes
+
 # Permanent deletion (requires explicit flag and confirmation)
 cli-ner clean --execute --force
+
+# Empty the Trash — this is what actually returns the space to the volume
+cli-ner clean --category trash --execute
 ```
+
+**The preview is the contract.** The items shown in the dry-run table are the exact items that
+get cleaned — the target list is scanned once and carried through selection, confirmation and
+execution, so nothing can drift in between.
+
+#### Available categories
+
+| Category | Aliases | Targets |
+|---|---|---|
+| `all` | | Everything below (**default**) |
+| `dev` | `dev-tools`, `developer` | brew + npm + pnpm + pip + gradle + maven + cargo + go |
+| `xcode` | | DerivedData + Archives + DeviceSupport + Simulators |
+| `user-cache` | `cache` | `~/Library/Caches/*` |
+| `user-logs` | `logs` | `~/Library/Logs/*` |
+| `temp-files` | `temp` | `/private/tmp`, `/private/var/tmp` (only entries idle for 24h+) |
+| `trash` | | Empties `~/.Trash` — **always permanent** |
+| `docker` | | Build cache + dangling images + stopped containers |
+| `brew` | `homebrew` | `brew cleanup -s` + `brew autoremove` |
+| `npm` | | `npm cache clean --force` |
+| `pnpm` | | `pnpm store prune` |
+| `pip` | | `pip3 cache purge` |
+| `gradle` | | `~/.gradle/caches` + stale wrapper distributions |
+| `maven` | | `~/.m2/repository` |
+| `cargo` | | Registry cache + extracted sources + git checkouts |
+| `go` | `golang` | `go clean -modcache` |
+| `xcode-derived-data` | | DerivedData only |
+| `xcode-archives` | `archives` | Build archives only |
+| `xcode-device-support` | `device-support` | iOS symbol files only |
+| `xcode-simulator` | `simulator` | CoreSimulator caches + devices with an uninstalled runtime |
+
+Everything CLI-NER removes is **regenerable**: it is re-downloaded or rebuilt on the next build.
+The cost of a mistake is time, never data.
 
 ### 3. `cli-ner dashboard` (or `cli-ner report --tui`) — Interactive TUI Dashboard
 ```bash
@@ -196,6 +271,13 @@ cli-ner report --last
 # Export to JSON format
 cli-ner report --format json
 ```
+
+`cli-ner report --last` includes a **"Recover From"** column: for every trashed item you get
+both its original path and where it now sits inside `~/.Trash`. A direct POSIX rename into the
+Trash carries no Finder "Put Back" metadata, so this log is what makes a restore possible.
+
+Logs are JSON Lines under `~/.cli-ner/logs/operations_YYYY-MM-DD.jsonl` and stay readable with
+`jq` independently of CLI-NER.
 
 ### 5. `cli-ner docker` — Safe Interactive Docker Manager & Cleanup
 ```bash
@@ -276,7 +358,14 @@ cli-ner doctor
 Checks:
 - Available and total space across all mounted disks.
 - Availability of external tools (Homebrew, npm, pip, Docker, Xcode).
+- **Full Disk Access**: whether `~/.Trash`, `~/Library/Caches`, `~/Library/Logs` and
+  `~/Library/Developer` are actually readable. Anything macOS blocks is silently excluded from
+  every scan, so `doctor` tells you when the reported totals are an undercount and how to fix it.
+- Running browsers whose caches will be protected during cleanup.
 - Status of security protections, permissions, and paths.
+
+> Run this first on a new machine. Without Full Disk Access the Trash is usually invisible, and
+> every total CLI-NER prints will be lower than reality.
 
 ### 8. `cli-ner bloat` (or `cli-ner phantom`) — Phantom Disk Space Analyzer
 
@@ -295,9 +384,20 @@ cli-ner bloat --detailed
 # Filter by minimum size threshold (e.g., >= 500MB or >= 1GB)
 cli-ner bloat --min-size 500MB
 
+# Also scan privileged system locations (/Library, /var/log, /var/vm, Spotlight index)
+cli-ner bloat --system
+
 # Structured JSON output
 cli-ner bloat --format json
 ```
+
+**How the total is computed**: scanners deliberately overlap — `~/Library/Caches` is reported
+as a whole *and* broken down per package manager. Nested locations are counted **once**, so the
+headline figure is not the naive sum of the rows. Rows whose size macOS cannot report (APFS
+local snapshots) are shown as `not measurable` and excluded from the total rather than guessed at.
+
+`--system` only *reports* privileged locations along with the `sudo` command to reclaim them.
+CLI-NER never runs anything as root.
 
 **What it detects**:
 - 🕐 **Time Machine Local Snapshots**: APFS snapshots locking freed blocks.
@@ -308,6 +408,15 @@ cli-ner bloat --format json
 - 🌐 **Browser Storage**: Chrome, Edge, Safari, Arc, Brave profile data & caches.
 - 📋 **System & ASL Logs**: `/var/log`, `/Library/Logs`, `~/Library/Logs`.
 - 📦 **Dev Package Caches**: Homebrew, Gradle, Maven, npm, pnpm, pip, CocoaPods, Cargo caches.
+
+> ⚠️ **Browser rows are informational only — `clean` never touches them.** `bloat` measures
+> `~/Library/Application Support/<Browser>` (or `~/Library/Safari`), which holds bookmarks,
+> history, saved passwords, cookies, extensions and site storage — real data, not cache. It is
+> intentionally outside the allowlist. The browser's *actual* HTTP cache lives separately under
+> `~/Library/Caches/<Browser>` and **is** covered by `cli-ner clean --category user-cache` (close
+> the browser first). To reclaim the rest, use the browser's own "Clear browsing data" and remove
+> unused profiles — see [the usage guide](docs/GUIDA_UTILIZZO.md#9-browser-cache-vs-dati-personali)
+> for the safe, step-by-step version.
 
 ---
 
@@ -357,21 +466,47 @@ cli-ner diff --format json
 
 ## 🛡️ Detailed Safety Model
 
-### 5-Step Validation Pipeline
+### Three levels of risk, safest by default
 
-Every file or directory candidate for cleanup passes through the following validation checks before any action is taken:
+| | What it does | How to trigger | Reversible? |
+|---|---|---|---|
+| **Preview** | Measures and shows, touches nothing | *default* | — |
+| **Trash** | Moves to `~/.Trash` | `--execute` | ✅ until you empty it |
+| **Permanent** | Actually deletes | `--execute --force` | ❌ **no** |
+
+### Validation pipeline
+
+Every candidate passes these checks before anything happens to it:
 
 1. **Blocklist Check**: If the target belongs to critical system paths (`/System`, `/usr`, etc.) or personal user data (`~/.ssh`, `~/Documents`, `~/Desktop`, `~/Library/Mail`), the operation is **immediately rejected**.
 2. **Allowlist Verification**: The path must strictly belong to an authorized cleanable category.
 3. **Root Folder Protection**: Deleting root folders (e.g., `~/Library/Caches`) is prohibited; only their individual child items can be cleaned.
-4. **Symlink Guard**: Symlinks are never blindly followed to prevent unintended deletions outside target directories.
+4. **Symlink Guard**: Symlinks are never followed — a symlink is moved or removed as a link, so a link pointing outside a target directory can never take its destination with it.
 5. **Process Safety Check**: Sensitive operations (e.g., Xcode DerivedData) verify that the corresponding application is not currently active.
+
+### Contextual protections
+
+- **Running browsers**: cache folders belonging to a browser that is open right now are excluded automatically, so sessions, tabs and extension state cannot be corrupted. Close the browser and re-run to reclaim them too.
+- **In-use temp files**: entries in `/private/tmp` and `/private/var/tmp` become eligible only after 24 hours of inactivity — scratch files, sockets and locks held by live processes are never pulled out from under them.
+- **Emptying the Trash acts only on the pre-scanned list** and refuses anything that is not a direct child of `~/.Trash`. A `--category all` run therefore cannot permanently destroy the caches it had just moved there for safekeeping.
+- **Docker gets its own confirmation** in execute mode, because data in containers that are not backed by a persistent volume is lost for good.
+- **No privilege escalation**: CLI-NER never runs as root. Locations that need `sudo` are only reported by `bloat --system`, together with the command to run yourself.
+
+### Restoring
+
+Every trashed item's original path *and* its destination inside `~/.Trash` are recorded in the
+audit log. `cli-ner report --last` shows both, so a restore is a plain `mv` even though a direct
+POSIX rename into the Trash leaves no Finder "Put Back" metadata.
 
 ---
 
 ## 🧪 Running Tests
 
-The project includes a comprehensive unit and end-to-end integration test suite:
+The project includes a unit and end-to-end integration test suite covering the safety
+guarantees directly — that a dry-run touches nothing, that a trash move is reported as trashed
+rather than freed and records its restore path, that targets outside the allowlist are refused,
+that emptying the Trash rejects anything that is not a direct child of `~/.Trash`, and that
+size measurement skips nothing and never follows symlinks.
 
 ```bash
 # Run all tests
@@ -379,6 +514,10 @@ cargo test
 
 # Run tests with detailed output
 cargo test -- --nocapture
+
+# Lints and formatting, as enforced by CI
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
 
 ---

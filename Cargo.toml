@@ -27,3 +27,4 @@ sysinfo = "0.31"
 uuid = { version = "1.10", features = ["v4", "serde"] }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
+rayon = "1.10"

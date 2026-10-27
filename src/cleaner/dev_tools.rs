@@ -3,7 +3,34 @@ use crate::report::operation_log::{ActionStatus, ActionType};
 use crate::safety::allowlist::CleanCategory;
 use crate::utils::fs::{calculate_size, expand_tilde};
 use anyhow::Result;
+use std::path::Path;
 use std::process::Command;
+
+/// Re-measure a cache directory after an external package manager ran and report the
+/// difference that actually landed on disk.
+///
+/// `brew cleanup`, `npm cache clean` and `pip cache purge` each decide for themselves
+/// what to evict and routinely leave part of the cache in place, so assuming the whole
+/// directory was reclaimed would overstate the result. Falls back to `before` only if
+/// the directory can no longer be measured at all (it was removed outright).
+fn measure_reclaimed(path: &Path, before: u64) -> u64 {
+    match calculate_size(path) {
+        Ok((after, _)) => before.saturating_sub(after),
+        Err(_) => before,
+    }
+}
+
+/// Extract the byte count from a docker prune's own `Total reclaimed space: 1.23GB` line.
+fn parse_docker_reclaimed(stdout: &str) -> u64 {
+    stdout
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Total reclaimed space:")
+                .map(|rest| parse_docker_size_str(rest.trim()))
+        })
+        .unwrap_or(0)
+}
 
 pub struct HomebrewCleaner;
 
@@ -48,54 +75,60 @@ impl Cleaner for HomebrewCleaner {
         }
     }
 
-    fn clean(&self, dry_run: bool, _force_permanent: bool) -> Result<CleanResult> {
-        let targets = self.scan()?;
-        let total_size = targets.iter().map(|t| t.size_bytes).sum();
+    fn clean_items(
+        &self,
+        targets: &[CleanTargetItem],
+        dry_run: bool,
+        _force_permanent: bool,
+    ) -> Result<CleanResult> {
+        let total_size: u64 = targets.iter().map(|t| t.size_bytes).sum();
         let mut result = CleanResult::default();
 
         if dry_run {
             result.total_bytes_freed = total_size;
             result.items_cleaned = targets.len();
-            result.details.push(ExecutionItemResult {
-                path: "brew cleanup -s && brew autoremove".into(),
-                size_bytes: total_size,
-                action: ActionType::DryRun,
-                status: ActionStatus::Success,
-            });
+            result.details.push(ExecutionItemResult::new(
+                "brew cleanup -s && brew autoremove".into(),
+                total_size,
+                ActionType::DryRun,
+                ActionStatus::Success,
+            ));
             return Ok(result);
         }
 
+        let cache_dir = expand_tilde("~/Library/Caches/Homebrew");
         let cleanup_status = Command::new("brew").args(["cleanup", "-s"]).status();
         let autoremove_status = Command::new("brew").arg("autoremove").status();
 
         match (cleanup_status, autoremove_status) {
             (Ok(c), Ok(a)) if c.success() && a.success() => {
-                result.total_bytes_freed = total_size;
+                let freed = measure_reclaimed(&cache_dir, total_size);
+                result.total_bytes_freed = freed;
                 result.items_cleaned = 1;
-                result.details.push(ExecutionItemResult {
-                    path: "brew cleanup & autoremove".into(),
-                    size_bytes: total_size,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Success,
-                });
+                result.details.push(ExecutionItemResult::new(
+                    "brew cleanup & autoremove".into(),
+                    freed,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Success,
+                ));
             }
             (Err(e), _) | (_, Err(e)) => {
                 result.items_failed = 1;
-                result.details.push(ExecutionItemResult {
-                    path: "brew cleanup".into(),
-                    size_bytes: 0,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed(e.to_string()),
-                });
+                result.details.push(ExecutionItemResult::new(
+                    "brew cleanup".into(),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed(e.to_string()),
+                ));
             }
             _ => {
                 result.items_failed = 1;
-                result.details.push(ExecutionItemResult {
-                    path: "brew cleanup".into(),
-                    size_bytes: 0,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed("brew cleanup returned non-zero exit code".into()),
-                });
+                result.details.push(ExecutionItemResult::new(
+                    "brew cleanup".into(),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed("brew cleanup returned non-zero exit code".into()),
+                ));
             }
         }
 
@@ -142,56 +175,60 @@ impl Cleaner for NpmCacheCleaner {
         }
     }
 
-    fn clean(&self, dry_run: bool, _force_permanent: bool) -> Result<CleanResult> {
-        let targets = self.scan()?;
-        let total_size = targets.iter().map(|t| t.size_bytes).sum();
+    fn clean_items(
+        &self,
+        targets: &[CleanTargetItem],
+        dry_run: bool,
+        _force_permanent: bool,
+    ) -> Result<CleanResult> {
+        let total_size: u64 = targets.iter().map(|t| t.size_bytes).sum();
         let mut result = CleanResult::default();
 
         if dry_run {
             result.total_bytes_freed = total_size;
             result.items_cleaned = targets.len();
-            result.details.push(ExecutionItemResult {
-                path: "npm cache clean --force".into(),
-                size_bytes: total_size,
-                action: ActionType::DryRun,
-                status: ActionStatus::Success,
-            });
+            result.details.push(ExecutionItemResult::new(
+                "npm cache clean --force".into(),
+                total_size,
+                ActionType::DryRun,
+                ActionStatus::Success,
+            ));
             return Ok(result);
         }
 
+        let npm_cache = expand_tilde("~/.npm/_cacache");
         match Command::new("npm")
             .args(["cache", "clean", "--force"])
             .status()
         {
             Ok(s) if s.success() => {
-                result.total_bytes_freed = total_size;
+                let freed = measure_reclaimed(&npm_cache, total_size);
+                result.total_bytes_freed = freed;
                 result.items_cleaned = 1;
-                result.details.push(ExecutionItemResult {
-                    path: "npm cache clean --force".into(),
-                    size_bytes: total_size,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Success,
-                });
+                result.details.push(ExecutionItemResult::new(
+                    "npm cache clean --force".into(),
+                    freed,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Success,
+                ));
             }
             Ok(_) => {
                 result.items_failed = 1;
-                result.details.push(ExecutionItemResult {
-                    path: "npm cache clean --force".into(),
-                    size_bytes: 0,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed(
-                        "npm cache clean returned non-zero exit code".into(),
-                    ),
-                });
+                result.details.push(ExecutionItemResult::new(
+                    "npm cache clean --force".into(),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed("npm cache clean returned non-zero exit code".into()),
+                ));
             }
             Err(e) => {
                 result.items_failed = 1;
-                result.details.push(ExecutionItemResult {
-                    path: "npm cache clean --force".into(),
-                    size_bytes: 0,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed(e.to_string()),
-                });
+                result.details.push(ExecutionItemResult::new(
+                    "npm cache clean --force".into(),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed(e.to_string()),
+                ));
             }
         }
 
@@ -239,20 +276,24 @@ impl Cleaner for PipCacheCleaner {
         }
     }
 
-    fn clean(&self, dry_run: bool, _force_permanent: bool) -> Result<CleanResult> {
-        let targets = self.scan()?;
-        let total_size = targets.iter().map(|t| t.size_bytes).sum();
+    fn clean_items(
+        &self,
+        targets: &[CleanTargetItem],
+        dry_run: bool,
+        _force_permanent: bool,
+    ) -> Result<CleanResult> {
+        let total_size: u64 = targets.iter().map(|t| t.size_bytes).sum();
         let mut result = CleanResult::default();
 
         if dry_run {
             result.total_bytes_freed = total_size;
             result.items_cleaned = targets.len();
-            result.details.push(ExecutionItemResult {
-                path: "pip3 cache purge".into(),
-                size_bytes: total_size,
-                action: ActionType::DryRun,
-                status: ActionStatus::Success,
-            });
+            result.details.push(ExecutionItemResult::new(
+                "pip3 cache purge".into(),
+                total_size,
+                ActionType::DryRun,
+                ActionStatus::Success,
+            ));
             return Ok(result);
         }
 
@@ -267,37 +308,39 @@ impl Cleaner for PipCacheCleaner {
             "pip"
         };
 
+        let pip_cache = expand_tilde("~/Library/Caches/pip");
         match Command::new(cmd).args(["cache", "purge"]).status() {
             Ok(s) if s.success() => {
-                result.total_bytes_freed = total_size;
+                let freed = measure_reclaimed(&pip_cache, total_size);
+                result.total_bytes_freed = freed;
                 result.items_cleaned = 1;
-                result.details.push(ExecutionItemResult {
-                    path: format!("{} cache purge", cmd),
-                    size_bytes: total_size,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Success,
-                });
+                result.details.push(ExecutionItemResult::new(
+                    format!("{} cache purge", cmd),
+                    freed,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Success,
+                ));
             }
             Ok(_) => {
                 result.items_failed = 1;
-                result.details.push(ExecutionItemResult {
-                    path: format!("{} cache purge", cmd),
-                    size_bytes: 0,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed(format!(
+                result.details.push(ExecutionItemResult::new(
+                    format!("{} cache purge", cmd),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed(format!(
                         "{} cache purge returned non-zero exit code",
                         cmd
                     )),
-                });
+                ));
             }
             Err(e) => {
                 result.items_failed = 1;
-                result.details.push(ExecutionItemResult {
-                    path: format!("{} cache purge", cmd),
-                    size_bytes: 0,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Failed(e.to_string()),
-                });
+                result.details.push(ExecutionItemResult::new(
+                    format!("{} cache purge", cmd),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed(e.to_string()),
+                ));
             }
         }
 
@@ -400,7 +443,10 @@ impl Cleaner for DockerCleaner {
                                 path: "docker:dangling-images".into(),
                                 size_bytes,
                                 file_count: count,
-                                description: "Docker dangling / untagged image layers".into(),
+                                // `docker system df` reports every *unused* image as
+                                // reclaimable, but this cleaner only prunes the dangling
+                                // ones — so treat this figure as an upper bound.
+                                description: "Docker unused image layers (upper bound: only dangling/untagged images are pruned)".into(),
                             });
                         } else if t_name.contains("Containers") {
                             items.push(CleanTargetItem {
@@ -430,95 +476,82 @@ impl Cleaner for DockerCleaner {
         Ok(items)
     }
 
-    fn clean(&self, dry_run: bool, _force_permanent: bool) -> Result<CleanResult> {
-        let targets = self.scan()?;
+    fn clean_items(
+        &self,
+        targets: &[CleanTargetItem],
+        dry_run: bool,
+        _force_permanent: bool,
+    ) -> Result<CleanResult> {
         let total_size: u64 = targets.iter().map(|t| t.size_bytes).sum();
         let mut result = CleanResult::default();
 
         if dry_run {
             result.total_bytes_freed = total_size;
             result.items_cleaned = targets.len();
-            for t in &targets {
-                result.details.push(ExecutionItemResult {
-                    path: format!("docker prune ({})", t.path.display()),
-                    size_bytes: t.size_bytes,
-                    action: ActionType::DryRun,
-                    status: ActionStatus::Success,
-                });
+            for t in targets {
+                result.details.push(ExecutionItemResult::new(
+                    format!("docker prune ({})", t.path.display()),
+                    t.size_bytes,
+                    ActionType::DryRun,
+                    ActionStatus::Success,
+                ));
             }
             return Ok(result);
         }
 
-        // Execute docker builder prune -f, docker image prune -f, docker container prune -f
-        let mut total_freed = 0u64;
+        // Each prune step reports what it actually removed on its own stdout
+        // ("Total reclaimed space: ..."). That figure is the truth; the `docker system df`
+        // estimate gathered during the scan is only an upper bound, because `image prune`
+        // touches dangling images while df counts every unused one.
+        let steps = [
+            ("docker builder prune -f", vec!["builder", "prune", "-f"]),
+            ("docker image prune -f", vec!["image", "prune", "-f"]),
+            (
+                "docker container prune -f (⚠️ stopped containers removed)",
+                vec!["container", "prune", "-f"],
+            ),
+        ];
 
-        // 1. Build cache
-        let b_res = Command::new("docker")
-            .args(["builder", "prune", "-f"])
-            .status();
-        let b_size = targets
-            .iter()
-            .find(|t| t.path.to_string_lossy().contains("build-cache"))
-            .map(|t| t.size_bytes)
-            .unwrap_or(0);
-        if let Ok(s) = b_res {
-            if s.success() {
-                total_freed += b_size;
-                result.items_cleaned += 1;
-                result.details.push(ExecutionItemResult {
-                    path: "docker builder prune -f".into(),
-                    size_bytes: b_size,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Success,
-                });
+        for (label, args) in steps {
+            match Command::new("docker").args(&args).output() {
+                Ok(output) if output.status.success() => {
+                    let reclaimed =
+                        parse_docker_reclaimed(&String::from_utf8_lossy(&output.stdout));
+                    result.total_bytes_freed += reclaimed;
+                    result.items_cleaned += 1;
+                    result.details.push(ExecutionItemResult::new(
+                        label.to_string(),
+                        reclaimed,
+                        ActionType::ExternalCommand,
+                        ActionStatus::Success,
+                    ));
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    result.items_failed += 1;
+                    result.details.push(ExecutionItemResult::new(
+                        label.to_string(),
+                        0,
+                        ActionType::ExternalCommand,
+                        ActionStatus::Failed(if stderr.is_empty() {
+                            "docker prune returned a non-zero exit code".into()
+                        } else {
+                            stderr
+                        }),
+                    ));
+                }
+                Err(e) => {
+                    result.items_failed += 1;
+                    result.details.push(ExecutionItemResult::new(
+                        label.to_string(),
+                        0,
+                        ActionType::ExternalCommand,
+                        ActionStatus::Failed(e.to_string()),
+                    ));
+                }
             }
         }
 
-        // 2. Images prune
-        let i_res = Command::new("docker")
-            .args(["image", "prune", "-f"])
-            .status();
-        let i_size = targets
-            .iter()
-            .find(|t| t.path.to_string_lossy().contains("dangling-images"))
-            .map(|t| t.size_bytes)
-            .unwrap_or(0);
-        if let Ok(s) = i_res {
-            if s.success() {
-                total_freed += i_size;
-                result.items_cleaned += 1;
-                result.details.push(ExecutionItemResult {
-                    path: "docker image prune -f".into(),
-                    size_bytes: i_size,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Success,
-                });
-            }
-        }
-
-        // 3. Container prune
-        let c_res = Command::new("docker")
-            .args(["container", "prune", "-f"])
-            .status();
-        let c_size = targets
-            .iter()
-            .find(|t| t.path.to_string_lossy().contains("stopped-containers"))
-            .map(|t| t.size_bytes)
-            .unwrap_or(0);
-        if let Ok(s) = c_res {
-            if s.success() {
-                total_freed += c_size;
-                result.items_cleaned += 1;
-                result.details.push(ExecutionItemResult {
-                    path: "docker container prune -f (⚠️ stopped containers removed)".into(),
-                    size_bytes: c_size,
-                    action: ActionType::ExternalCommand,
-                    status: ActionStatus::Success,
-                });
-            }
-        }
-
-        result.total_bytes_freed = total_freed;
         Ok(result)
     }
 }
@@ -535,14 +568,24 @@ impl Cleaner for GradleCacheCleaner {
     }
 
     fn description(&self) -> &'static str {
-        "Cleans cached Gradle downloaded dependencies in ~/.gradle/caches"
+        "Cleans cached Gradle dependencies in ~/.gradle/caches and downloaded Gradle distributions in ~/.gradle/wrapper/dists"
     }
 
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
-        let gradle_cache = expand_tilde("~/.gradle/caches");
+        // Each project pins its own Gradle version through the wrapper, so old
+        // distributions accumulate in `wrapper/dists` and are re-downloaded on demand.
+        let roots = [
+            ("~/.gradle/caches", "Gradle dependency cache"),
+            ("~/.gradle/wrapper/dists", "Gradle distribution"),
+        ];
+
         let mut items = Vec::new();
-        if gradle_cache.is_dir() {
-            for entry in std::fs::read_dir(&gradle_cache)?.flatten() {
+        for (root, label) in roots {
+            let dir = expand_tilde(root);
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir)?.flatten() {
                 let path = entry.path();
                 if let Ok((size, count)) = calculate_size(&path) {
                     if size > 0 {
@@ -551,7 +594,7 @@ impl Cleaner for GradleCacheCleaner {
                             path,
                             size_bytes: size,
                             file_count: count,
-                            description: format!("Gradle cache {}", name),
+                            description: format!("{} {}", label, name),
                         });
                     }
                 }
@@ -613,14 +656,27 @@ impl Cleaner for CargoCacheCleaner {
     }
 
     fn description(&self) -> &'static str {
-        "Cleans Cargo downloaded registry package cache in ~/.cargo/registry/cache"
+        "Cleans the Cargo registry download cache, the extracted crate sources, and cached git dependency checkouts under ~/.cargo"
     }
 
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
-        let cargo_cache = expand_tilde("~/.cargo/registry/cache");
+        // `registry/src` (extracted crates) is usually larger than `registry/cache`
+        // (the .crate archives) and was previously left behind entirely. Both are
+        // rebuilt automatically on the next `cargo build`.
+        let roots = [
+            ("~/.cargo/registry/cache", "Cargo registry archives"),
+            ("~/.cargo/registry/src", "Cargo extracted crate sources"),
+            ("~/.cargo/git/checkouts", "Cargo git dependency checkout"),
+            ("~/.cargo/git/db", "Cargo git dependency clone"),
+        ];
+
         let mut items = Vec::new();
-        if cargo_cache.is_dir() {
-            for entry in std::fs::read_dir(&cargo_cache)?.flatten() {
+        for (root, label) in roots {
+            let dir = expand_tilde(root);
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir)?.flatten() {
                 let path = entry.path();
                 if let Ok((size, count)) = calculate_size(&path) {
                     if size > 0 {
@@ -629,7 +685,7 @@ impl Cleaner for CargoCacheCleaner {
                             path,
                             size_bytes: size,
                             file_count: count,
-                            description: format!("Cargo registry cache {}", name),
+                            description: format!("{} {}", label, name),
                         });
                     }
                 }
@@ -637,5 +693,42 @@ impl Cleaner for CargoCacheCleaner {
         }
         items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Docker prints what it really removed; that is the number worth reporting,
+    /// not the `docker system df` upper bound gathered before the prune.
+    #[test]
+    fn test_parse_docker_reclaimed() {
+        let stdout = "Deleted build cache objects:\nabc123\n\nTotal reclaimed space: 1.23GB\n";
+        // Docker reports binary units, so 1.23GB is 1.23 * 1024^3, truncated.
+        assert_eq!(parse_docker_reclaimed(stdout), 1_320_702_443);
+
+        assert_eq!(parse_docker_reclaimed("Total reclaimed space: 0B\n"), 0);
+        // A prune that printed nothing recognisable must claim nothing.
+        assert_eq!(parse_docker_reclaimed("nothing to do\n"), 0);
+    }
+
+    /// External tools decide for themselves what to evict, so the freed figure comes
+    /// from re-measuring, and never exceeds what was there to begin with.
+    #[test]
+    fn test_measure_reclaimed_uses_observed_difference() {
+        let dir = std::env::temp_dir().join("test_cli_ner_measure_reclaimed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let (before, _) = calculate_size(&dir).unwrap();
+        // Nothing was removed, so nothing may be claimed.
+        assert_eq!(measure_reclaimed(&dir, before), 0);
+
+        // A directory that vanished entirely reclaimed everything it held.
+        let gone = dir.join("does-not-exist");
+        assert_eq!(measure_reclaimed(&gone, 5_000), 5_000);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

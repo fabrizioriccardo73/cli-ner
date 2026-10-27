@@ -171,7 +171,7 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
     }
 
     // Sort by largest growth first (positive delta descending), then largest reductions
-    entries.sort_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.delta_bytes));
 
     // Calculate non-overlapping hierarchical direct deltas to avoid double/triple counting
     let direct_deltas = compute_direct_deltas(&path_deltas);
@@ -195,20 +195,20 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
 
     let net_delta_bytes = (total_growth_bytes as i64) - (total_reduction_bytes as i64);
 
-    let old_apfs_snapshots_count = old.apfs_snapshots_count.or_else(|| {
-        if old.apfs_snapshots.is_empty() {
+    let old_apfs_snapshots_count = old
+        .apfs_snapshots_count
+        .or(if old.apfs_snapshots.is_empty() {
             None
         } else {
             Some(old.apfs_snapshots.len())
-        }
-    });
-    let new_apfs_snapshots_count = new.apfs_snapshots_count.or_else(|| {
-        if new.apfs_snapshots.is_empty() {
+        });
+    let new_apfs_snapshots_count = new
+        .apfs_snapshots_count
+        .or(if new.apfs_snapshots.is_empty() {
             None
         } else {
             Some(new.apfs_snapshots.len())
-        }
-    });
+        });
     let apfs_snapshots_delta = match (old_apfs_snapshots_count, new_apfs_snapshots_count) {
         (Some(old_cnt), Some(new_cnt)) => Some((new_cnt as i64) - (old_cnt as i64)),
         _ => None,

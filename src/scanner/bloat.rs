@@ -7,7 +7,7 @@ use colored::*;
 use comfy_table::{Cell, Color, Row};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Categories of phantom disk bloat on macOS
@@ -93,6 +93,10 @@ pub struct BloatSource {
     pub reclaimable: bool,
     pub reclaim_hint: String,
     pub requires_sudo: bool,
+    /// True when `size_bytes` could not be measured directly and is not a fact.
+    /// Such rows are shown to the user but kept out of every headline total.
+    #[serde(default)]
+    pub size_is_estimate: bool,
     pub details: Option<String>,
 }
 
@@ -145,7 +149,9 @@ pub fn scan_time_machine_snapshots() -> Option<BloatSource> {
             !l.is_empty()
                 && !l.starts_with("Snapshot dates")
                 && !l.starts_with("Snapshots for")
-                && (l.contains("com.apple.TimeMachine") || l.chars().all(|c| c.is_ascii_digit() || c == '-' || c == ':'))
+                && (l.contains("com.apple.TimeMachine")
+                    || l.chars()
+                        .all(|c| c.is_ascii_digit() || c == '-' || c == ':'))
         })
         .collect();
 
@@ -154,22 +160,23 @@ pub fn scan_time_machine_snapshots() -> Option<BloatSource> {
         return None;
     }
 
-    // Local snapshots lock deleted blocks from APFS freed pool.
-    // Each snapshot typically holds 1 GB - 10+ GB depending on disk churn.
-    // We estimate ~2 GB per snapshot as a conservative baseline indicator if size cannot be queried directly.
-    let estimated_size = (count as u64) * 2_000_000_000;
-
+    // APFS local snapshots pin blocks that deleted files would otherwise release, and
+    // macOS exposes no supported way to ask how many bytes any given snapshot holds.
+    // Rather than invent a per-snapshot figure and fold it into the totals, the count is
+    // reported with the size explicitly marked as unknown.
     Some(BloatSource {
         category: BloatCategory::TimeMachineSnapshots,
         label: format!("{} APFS local snapshot(s)", count),
-        size_bytes: estimated_size,
+        size_bytes: 0,
         path_or_command: "tmutil listlocalsnapshotdates".to_string(),
-        severity: BloatSeverity::from_bytes(estimated_size),
+        severity: BloatSeverity::Low,
         reclaimable: true,
-        reclaim_hint: "sudo tmutil deletelocalsnapshots <date> | tmutil thinlocalsnapshots / 9999999999 4".to_string(),
+        reclaim_hint: "sudo tmutil thinlocalsnapshots / 9999999999 4 (or deletelocalsnapshots <date>)".to_string(),
         requires_sudo: true,
+        size_is_estimate: true,
         details: Some(format!(
-            "{} snapshots active: {}",
+            "{} snapshot(s) active: {}. Each one holds on to blocks freed since it was taken; \
+             macOS reports no per-snapshot size, so this space shows up as \"purgeable\" in Finder.",
             count,
             snapshot_lines.join(", ")
         )),
@@ -197,9 +204,15 @@ pub fn scan_sleep_image_and_swap() -> Vec<BloatSource> {
                 path_or_command: sleepimage_path.display().to_string(),
                 severity: BloatSeverity::from_bytes(size),
                 reclaimable: true,
-                reclaim_hint: "sudo pmset -a hibernatemode 0 && sudo rm /var/vm/sleepimage (for desktop Macs)".to_string(),
+                reclaim_hint:
+                    "sudo pmset -a hibernatemode 0 && sudo rm /var/vm/sleepimage (for desktop Macs)"
+                        .to_string(),
                 requires_sudo: true,
-                details: Some("Pre-allocated RAM dump file created for Mac safe sleep / hibernation.".to_string()),
+                size_is_estimate: false,
+                details: Some(
+                    "Pre-allocated RAM dump file created for Mac safe sleep / hibernation."
+                        .to_string(),
+                ),
             });
         }
     }
@@ -226,9 +239,15 @@ pub fn scan_sleep_image_and_swap() -> Vec<BloatSource> {
                 path_or_command: "/var/vm/swapfile*".to_string(),
                 severity: BloatSeverity::from_bytes(total_swap),
                 reclaimable: false,
-                reclaim_hint: "Restarting macOS will automatically flush and reclaim dynamic swap space.".to_string(),
+                reclaim_hint:
+                    "Restarting macOS will automatically flush and reclaim dynamic swap space."
+                        .to_string(),
                 requires_sudo: false,
-                details: Some("Dynamic swap memory created by macOS when physical RAM is under pressure.".to_string()),
+                size_is_estimate: false,
+                details: Some(
+                    "Dynamic swap memory created by macOS when physical RAM is under pressure."
+                        .to_string(),
+                ),
             });
         }
     }
@@ -288,6 +307,7 @@ pub fn scan_xcode_and_simulators() -> Vec<BloatSource> {
                         reclaimable,
                         reclaim_hint: hint.to_string(),
                         requires_sudo: false,
+                        size_is_estimate: false,
                         details: Some(format!("Contains {} item(s)", count)),
                     });
                 }
@@ -340,7 +360,11 @@ pub fn scan_docker_and_containers() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: hint.to_string(),
                         requires_sudo: false,
-                        details: Some("Virtual disk image storing containers, images, and BuildKit layers.".to_string()),
+                        size_is_estimate: false,
+                        details: Some(
+                            "Virtual disk image storing containers, images, and BuildKit layers."
+                                .to_string(),
+                        ),
                     });
                 }
             }
@@ -398,6 +422,7 @@ pub fn scan_user_caches() -> Vec<BloatSource> {
             reclaimable: true,
             reclaim_hint: "cli-ner clean --category user-cache --execute".to_string(),
             requires_sudo: false,
+            size_is_estimate: false,
             details: if !top_str.is_empty() {
                 Some(format!("Top consumers: {}", top_str))
             } else {
@@ -414,11 +439,23 @@ pub fn scan_browser_profiles() -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let browsers = [
-        ("Google Chrome Data", "~/Library/Application Support/Google/Chrome"),
+        (
+            "Google Chrome Data",
+            "~/Library/Application Support/Google/Chrome",
+        ),
         ("Arc Browser Data", "~/Library/Application Support/Arc"),
-        ("Brave Browser Data", "~/Library/Application Support/BraveSoftware/Brave-Browser"),
-        ("Microsoft Edge Data", "~/Library/Application Support/Microsoft Edge"),
-        ("Mozilla Firefox Profiles", "~/Library/Application Support/Firefox/Profiles"),
+        (
+            "Brave Browser Data",
+            "~/Library/Application Support/BraveSoftware/Brave-Browser",
+        ),
+        (
+            "Microsoft Edge Data",
+            "~/Library/Application Support/Microsoft Edge",
+        ),
+        (
+            "Mozilla Firefox Profiles",
+            "~/Library/Application Support/Firefox/Profiles",
+        ),
         ("Apple Safari Data", "~/Library/Safari"),
     ];
 
@@ -437,6 +474,7 @@ pub fn scan_browser_profiles() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: "Clear browser browsing history, cookies, and extension storage in browser settings.".to_string(),
                         requires_sudo: false,
+                        size_is_estimate: false,
                         details: Some("IndexedDB, local storage, extensions, service workers, and GPU cache.".to_string()),
                     });
                 }
@@ -448,16 +486,34 @@ pub fn scan_browser_profiles() -> Vec<BloatSource> {
 }
 
 /// 7. Scan System and User Logs
-pub fn scan_system_and_user_logs() -> Vec<BloatSource> {
+pub fn scan_system_and_user_logs(include_system: bool) -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let log_dirs = [
-        ("User Logs (`~/Library/Logs`)", "~/Library/Logs", "cli-ner clean --category user-logs --execute", false),
-        ("System Logs (`/Library/Logs`)", "/Library/Logs", "sudo rm -rf /Library/Logs/*", true),
-        ("Unix / ASL Logs (`/var/log`)", "/var/log", "sudo log erase --all (or sudo rm -rf /var/log/asl/*)", true),
+        (
+            "User Logs (`~/Library/Logs`)",
+            "~/Library/Logs",
+            "cli-ner clean --category user-logs --execute",
+            false,
+        ),
+        (
+            "System Logs (`/Library/Logs`)",
+            "/Library/Logs",
+            "sudo rm -rf /Library/Logs/*",
+            true,
+        ),
+        (
+            "Unix / ASL Logs (`/var/log`)",
+            "/var/log",
+            "sudo log erase --all (or sudo rm -rf /var/log/asl/*)",
+            true,
+        ),
     ];
 
     for (label, path_str, hint, sudo) in log_dirs {
+        if sudo && !include_system {
+            continue;
+        }
         let expanded = expand_tilde(path_str);
         if expanded.exists() {
             if let Ok((size, count)) = calculate_size(&expanded) {
@@ -472,6 +528,7 @@ pub fn scan_system_and_user_logs() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: hint.to_string(),
                         requires_sudo: sudo,
+                        size_is_estimate: false,
                         details: Some(format!("Contains {} log files/folders", count)),
                     });
                 }
@@ -483,15 +540,24 @@ pub fn scan_system_and_user_logs() -> Vec<BloatSource> {
 }
 
 /// 8. Scan Crash and Diagnostic Reports
-pub fn scan_crash_reports() -> Vec<BloatSource> {
+pub fn scan_crash_reports(include_system: bool) -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let dirs = [
-        ("User Diagnostic Reports", "~/Library/Logs/DiagnosticReports"),
-        ("System Diagnostic Reports", "/Library/Logs/DiagnosticReports"),
+        (
+            "User Diagnostic Reports",
+            "~/Library/Logs/DiagnosticReports",
+        ),
+        (
+            "System Diagnostic Reports",
+            "/Library/Logs/DiagnosticReports",
+        ),
     ];
 
     for (label, path_str) in dirs {
+        if path_str.starts_with("/Library") && !include_system {
+            continue;
+        }
         let expanded = expand_tilde(path_str);
         if expanded.exists() {
             if let Ok((size, count)) = calculate_size(&expanded) {
@@ -504,8 +570,10 @@ pub fn scan_crash_reports() -> Vec<BloatSource> {
                         path_or_command: contract_tilde(&expanded),
                         severity: BloatSeverity::from_bytes(size),
                         reclaimable: true,
-                        reclaim_hint: "Safe to delete old crash/spin dump reports (.ips, .crash).".to_string(),
+                        reclaim_hint: "Safe to delete old crash/spin dump reports (.ips, .crash)."
+                            .to_string(),
                         requires_sudo: path_str.starts_with("/Library"),
+                        size_is_estimate: false,
                         details: Some(format!("{} report file(s)", count)),
                     });
                 }
@@ -521,9 +589,15 @@ pub fn scan_messages_and_mail() -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let targets = [
-        ("Apple Mail Attachments & Downloads", "~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads"),
+        (
+            "Apple Mail Attachments & Downloads",
+            "~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads",
+        ),
         ("Apple Mail Storage", "~/Library/Mail"),
-        ("iMessage / SMS Attachments", "~/Library/Messages/Attachments"),
+        (
+            "iMessage / SMS Attachments",
+            "~/Library/Messages/Attachments",
+        ),
     ];
 
     for (label, path_str) in targets {
@@ -541,6 +615,7 @@ pub fn scan_messages_and_mail() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: "Delete unnecessary large downloaded media/attachments in Mail or Messages settings.".to_string(),
                         requires_sudo: false,
+                        size_is_estimate: false,
                         details: Some(format!("Contains {} cached file(s)", count)),
                     });
                 }
@@ -556,8 +631,14 @@ pub fn scan_cloud_storage() -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let targets = [
-        ("iCloud Mobile Documents Cache", "~/Library/Mobile Documents"),
-        ("macOS CloudStorage Provider Cache", "~/Library/CloudStorage"),
+        (
+            "iCloud Mobile Documents Cache",
+            "~/Library/Mobile Documents",
+        ),
+        (
+            "macOS CloudStorage Provider Cache",
+            "~/Library/CloudStorage",
+        ),
     ];
 
     for (label, path_str) in targets {
@@ -573,8 +654,11 @@ pub fn scan_cloud_storage() -> Vec<BloatSource> {
                         path_or_command: contract_tilde(&expanded),
                         severity: BloatSeverity::from_bytes(size),
                         reclaimable: true,
-                        reclaim_hint: "Use 'Remove Download' in Finder to evict local copies of cloud files.".to_string(),
+                        reclaim_hint:
+                            "Use 'Remove Download' in Finder to evict local copies of cloud files."
+                                .to_string(),
                         requires_sudo: false,
+                        size_is_estimate: false,
                         details: Some(format!("{} cloud file(s) cached locally on disk", count)),
                     });
                 }
@@ -586,16 +670,23 @@ pub fn scan_cloud_storage() -> Vec<BloatSource> {
 }
 
 /// 11. Scan Software Update & Installer Sandboxes
-pub fn scan_software_update() -> Vec<BloatSource> {
+pub fn scan_software_update(include_system: bool) -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let targets = [
         ("macOS Software Update Cache", "/Library/Updates", true),
         ("Installer Sandboxes", "/Library/InstallerSandboxes", true),
-        ("User Software Update Cache", "~/Library/Caches/com.apple.SoftwareUpdate", false),
+        (
+            "User Software Update Cache",
+            "~/Library/Caches/com.apple.SoftwareUpdate",
+            false,
+        ),
     ];
 
     for (label, path_str, sudo) in targets {
+        if sudo && !include_system {
+            continue;
+        }
         let expanded = expand_tilde(path_str);
         if expanded.exists() {
             if let Ok((size, _)) = calculate_size(&expanded) {
@@ -610,6 +701,7 @@ pub fn scan_software_update() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: "macOS staged installer files. Usually cleaned automatically after installation or safe to delete if orphaned.".to_string(),
                         requires_sudo: sudo,
+                        size_is_estimate: false,
                         details: Some("Staged macOS system update downloads.".to_string()),
                     });
                 }
@@ -626,7 +718,10 @@ pub fn scan_spotlight_index() -> Vec<BloatSource> {
 
     let targets = [
         ("Spotlight Index (`/.Spotlight-V100`)", "/.Spotlight-V100"),
-        ("Spotlight Index Data (`/System/Volumes/Data/.Spotlight-V100`)", "/System/Volumes/Data/.Spotlight-V100"),
+        (
+            "Spotlight Index Data (`/System/Volumes/Data/.Spotlight-V100`)",
+            "/System/Volumes/Data/.Spotlight-V100",
+        ),
     ];
 
     for (label, path_str) in targets {
@@ -644,6 +739,7 @@ pub fn scan_spotlight_index() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: "sudo mdutil -E / (rebuilds and flushes corrupted/bloated Spotlight index)".to_string(),
                         requires_sudo: true,
+                        size_is_estimate: false,
                         details: Some("Metadata and full-text index database for macOS Spotlight search.".to_string()),
                     });
                 }
@@ -668,9 +764,15 @@ pub fn scan_trash() -> Option<BloatSource> {
                     path_or_command: "~/.Trash".to_string(),
                     severity: BloatSeverity::from_bytes(size),
                     reclaimable: true,
-                    reclaim_hint: "cli-ner clean --category trash --execute (or empty Trash in Finder)".to_string(),
+                    reclaim_hint:
+                        "cli-ner clean --category trash --execute (or empty Trash in Finder)"
+                            .to_string(),
                     requires_sudo: false,
-                    details: Some(format!("Contains {} item(s) pending permanent deletion", count)),
+                    size_is_estimate: false,
+                    details: Some(format!(
+                        "Contains {} item(s) pending permanent deletion",
+                        count
+                    )),
                 });
             }
         }
@@ -683,15 +785,51 @@ pub fn scan_dev_package_caches() -> Vec<BloatSource> {
     let mut sources = Vec::new();
 
     let targets = [
-        ("Homebrew Downloads Cache", "~/Library/Caches/Homebrew", "cli-ner clean --category brew --execute"),
-        ("CocoaPods Pod Cache", "~/Library/Caches/CocoaPods", "pod cache clean --all"),
-        ("npm Global Cache", "~/.npm/_cacache", "cli-ner clean --category npm --execute"),
-        ("Yarn Global Cache", "~/Library/Caches/Yarn", "yarn cache clean"),
-        ("pnpm Global Store", "~/Library/pnpm/store", "pnpm store prune"),
-        ("pip / Python Wheel Cache", "~/Library/Caches/pip", "cli-ner clean --category pip --execute"),
-        ("Gradle Dependency Cache", "~/.gradle/caches", "cli-ner clean --category gradle --execute (or --category dev)"),
-        ("Maven Local Repository", "~/.m2/repository", "cli-ner clean --category maven --execute (or --category dev)"),
-        ("Rust Cargo Registry Cache", "~/.cargo/registry/cache", "cli-ner clean --category cargo --execute"),
+        (
+            "Homebrew Downloads Cache",
+            "~/Library/Caches/Homebrew",
+            "cli-ner clean --category brew --execute",
+        ),
+        (
+            "CocoaPods Pod Cache",
+            "~/Library/Caches/CocoaPods",
+            "pod cache clean --all",
+        ),
+        (
+            "npm Global Cache",
+            "~/.npm/_cacache",
+            "cli-ner clean --category npm --execute",
+        ),
+        (
+            "Yarn Global Cache",
+            "~/Library/Caches/Yarn",
+            "yarn cache clean",
+        ),
+        (
+            "pnpm Global Store",
+            "~/Library/pnpm/store",
+            "pnpm store prune",
+        ),
+        (
+            "pip / Python Wheel Cache",
+            "~/Library/Caches/pip",
+            "cli-ner clean --category pip --execute",
+        ),
+        (
+            "Gradle Dependency Cache",
+            "~/.gradle/caches",
+            "cli-ner clean --category gradle --execute (or --category dev)",
+        ),
+        (
+            "Maven Local Repository",
+            "~/.m2/repository",
+            "cli-ner clean --category maven --execute (or --category dev)",
+        ),
+        (
+            "Rust Cargo Registry Cache",
+            "~/.cargo/registry/cache",
+            "cli-ner clean --category cargo --execute",
+        ),
     ];
 
     for (label, path_str, hint) in targets {
@@ -709,6 +847,7 @@ pub fn scan_dev_package_caches() -> Vec<BloatSource> {
                         reclaimable: true,
                         reclaim_hint: hint.to_string(),
                         requires_sudo: false,
+                        size_is_estimate: false,
                         details: Some(format!("Contains {} cached packages/artifacts", count)),
                     });
                 }
@@ -723,8 +862,61 @@ pub fn scan_dev_package_caches() -> Vec<BloatSource> {
 // Orchestration & Report Formatting
 // -------------------------------------------------------------------------------------------------
 
-/// Run complete phantom disk bloat analysis across all macOS subsystems
-pub fn run_full_bloat_analysis(_include_system: bool) -> Result<BloatReport> {
+/// Sum sizes while counting each region of the filesystem exactly once.
+///
+/// Several scanners deliberately overlap — `~/Library/Caches` is reported as a whole and
+/// again broken down per package manager, `~/Library/Logs` overlaps its DiagnosticReports
+/// subfolder — so adding every row would report gigabytes that exist only once as if they
+/// existed twice. Ancestors win: the broadest row is counted and its descendants absorbed.
+/// Rows whose size is only an estimate never contribute.
+pub fn non_overlapping_total(sources: &[&BloatSource]) -> u64 {
+    let mut order: Vec<&&BloatSource> = sources.iter().collect();
+    // Shortest paths first, so a parent is always counted before its children are examined.
+    order.sort_by_key(|s| {
+        source_fs_path(s)
+            .map(|p| p.components().count())
+            .unwrap_or(usize::MAX)
+    });
+
+    let mut counted: Vec<PathBuf> = Vec::new();
+    let mut total = 0u64;
+
+    for source in order {
+        if source.size_is_estimate {
+            continue;
+        }
+        match source_fs_path(source) {
+            Some(path) => {
+                if counted.iter().any(|seen| path.starts_with(seen)) {
+                    continue;
+                }
+                counted.push(path.clone());
+                total += source.size_bytes;
+            }
+            // Not a filesystem location (a docker/tmutil query): nothing can overlap it.
+            None => total += source.size_bytes,
+        }
+    }
+
+    total
+}
+
+/// The filesystem location a source refers to, when it refers to one at all.
+fn source_fs_path(source: &BloatSource) -> Option<PathBuf> {
+    let raw = source.path_or_command.trim();
+    if raw.starts_with('/') || raw.starts_with('~') {
+        Some(expand_tilde(raw))
+    } else {
+        None
+    }
+}
+
+/// Run complete phantom disk bloat analysis across macOS subsystems.
+///
+/// `include_system` opts into the scans that reach outside the user's home directory
+/// (`/Library`, `/var/log`, `/var/vm`, the Spotlight index). Those are slow, frequently
+/// unreadable without elevated privileges, and reclaiming them needs `sudo` anyway.
+pub fn run_full_bloat_analysis(include_system: bool) -> Result<BloatReport> {
     let mut sources = Vec::new();
 
     // 1. Time Machine Local Snapshots
@@ -732,8 +924,10 @@ pub fn run_full_bloat_analysis(_include_system: bool) -> Result<BloatReport> {
         sources.push(tm);
     }
 
-    // 2. Sleep image & Swap
-    sources.extend(scan_sleep_image_and_swap());
+    // 2. Sleep image & Swap (lives under /var/vm)
+    if include_system {
+        sources.extend(scan_sleep_image_and_swap());
+    }
 
     // 3. Xcode & Simulators
     sources.extend(scan_xcode_and_simulators());
@@ -748,10 +942,10 @@ pub fn run_full_bloat_analysis(_include_system: bool) -> Result<BloatReport> {
     sources.extend(scan_browser_profiles());
 
     // 7. System & User Logs
-    sources.extend(scan_system_and_user_logs());
+    sources.extend(scan_system_and_user_logs(include_system));
 
     // 8. Crash Reports
-    sources.extend(scan_crash_reports());
+    sources.extend(scan_crash_reports(include_system));
 
     // 9. Messages & Mail
     sources.extend(scan_messages_and_mail());
@@ -760,10 +954,12 @@ pub fn run_full_bloat_analysis(_include_system: bool) -> Result<BloatReport> {
     sources.extend(scan_cloud_storage());
 
     // 11. Software Update
-    sources.extend(scan_software_update());
+    sources.extend(scan_software_update(include_system));
 
-    // 12. Spotlight Index
-    sources.extend(scan_spotlight_index());
+    // 12. Spotlight Index (root-level, requires elevated privileges to read fully)
+    if include_system {
+        sources.extend(scan_spotlight_index());
+    }
 
     // 13. Trash
     if let Some(trash) = scan_trash() {
@@ -776,7 +972,7 @@ pub fn run_full_bloat_analysis(_include_system: bool) -> Result<BloatReport> {
     // Sort by size descending
     sources.sort_by_key(|s| std::cmp::Reverse(s.size_bytes));
 
-    let total_bloat_bytes = sources.iter().map(|s| s.size_bytes).sum();
+    let total_bloat_bytes = non_overlapping_total(&sources.iter().collect::<Vec<_>>());
 
     // Get root disk info
     let disk_stats = get_disk_stats();
@@ -836,10 +1032,12 @@ pub fn format_bloat_table_with_width(
         ));
     }
 
+    // Rows whose size could not be measured are always shown: filtering them by a byte
+    // threshold would silently hide them behind a number they do not actually have.
     let filtered_sources: Vec<&BloatSource> = report
         .sources
         .iter()
-        .filter(|s| s.size_bytes >= min_size_bytes)
+        .filter(|s| s.size_is_estimate || s.size_bytes >= min_size_bytes)
         .collect();
 
     if filtered_sources.is_empty() {
@@ -849,6 +1047,14 @@ pub fn format_bloat_table_with_width(
         ));
         return out;
     }
+
+    let size_cell = |s: &BloatSource| {
+        if s.size_is_estimate {
+            Cell::new("not measurable").fg(Color::DarkGrey)
+        } else {
+            Cell::new(format_bytes(s.size_bytes)).fg(Color::Green)
+        }
+    };
 
     let mut table = create_styled_table_with_width(width);
     let is_compact = width < 100;
@@ -866,7 +1072,7 @@ pub fn format_bloat_table_with_width(
             table.add_row(Row::from(vec![
                 Cell::new(s.category.display_name()),
                 Cell::new(&s.label),
-                Cell::new(format_bytes(s.size_bytes)).fg(Color::Green),
+                size_cell(s),
                 Cell::new(s.severity.badge()),
                 Cell::new(&s.reclaim_hint).fg(Color::Yellow),
             ]));
@@ -882,15 +1088,20 @@ pub fn format_bloat_table_with_width(
         ]);
 
         for s in &filtered_sources {
-            let reclaimable_str = if s.reclaimable {
-                "✅ Yes".green().to_string()
-            } else {
+            let reclaimable_str = if !s.reclaimable {
                 "⚠️ Reboot".yellow().to_string()
+            } else if s.requires_sudo {
+                "✅ Yes (sudo)".green().to_string()
+            } else {
+                "✅ Yes".green().to_string()
             };
 
             let hint_str = if detailed {
                 if let Some(details) = &s.details {
-                    format!("{}\n💡 {}\n📂 {}", s.reclaim_hint, details, s.path_or_command)
+                    format!(
+                        "{}\n💡 {}\n📂 {}",
+                        s.reclaim_hint, details, s.path_or_command
+                    )
                 } else {
                     format!("{}\n📂 {}", s.reclaim_hint, s.path_or_command)
                 }
@@ -901,7 +1112,7 @@ pub fn format_bloat_table_with_width(
             table.add_row(Row::from(vec![
                 Cell::new(s.category.display_name()),
                 Cell::new(&s.label),
-                Cell::new(format_bytes(s.size_bytes)).fg(Color::Green),
+                size_cell(s),
                 Cell::new(s.severity.badge()),
                 Cell::new(reclaimable_str),
                 Cell::new(hint_str).fg(Color::Yellow),
@@ -912,7 +1123,7 @@ pub fn format_bloat_table_with_width(
     out.push_str(&format!("\n{}\n", table));
 
     // Summary section
-    let total_filtered: u64 = filtered_sources.iter().map(|s| s.size_bytes).sum();
+    let total_filtered = non_overlapping_total(&filtered_sources);
     out.push_str(&format!(
         "\n📊 {}\n",
         format!(
@@ -921,8 +1132,28 @@ pub fn format_bloat_table_with_width(
         )
         .bold()
     ));
+    out.push_str(&format!(
+        "   {}\n",
+        "Overlapping locations (e.g. ~/Library/Caches and the package-manager caches inside it) are counted once."
+            .dimmed()
+    ));
 
-    if let Some(top) = filtered_sources.first() {
+    let unmeasured: Vec<&&BloatSource> = filtered_sources
+        .iter()
+        .filter(|s| s.size_is_estimate)
+        .collect();
+    if !unmeasured.is_empty() {
+        out.push_str(&format!(
+            "   {}\n",
+            format!(
+                "{} row(s) have no measurable size and are excluded from the total above.",
+                unmeasured.len()
+            )
+            .dimmed()
+        ));
+    }
+
+    if let Some(top) = filtered_sources.iter().find(|s| !s.size_is_estimate) {
         out.push_str(&format!(
             "🏆 Top Opportunity: {} ({})\n   ↳ Action: {}\n",
             top.label.bold().white(),
@@ -948,9 +1179,18 @@ mod tests {
     #[test]
     fn test_bloat_severity_classification() {
         assert_eq!(BloatSeverity::from_bytes(500_000_000), BloatSeverity::Low);
-        assert_eq!(BloatSeverity::from_bytes(2_000_000_000), BloatSeverity::Medium);
-        assert_eq!(BloatSeverity::from_bytes(10_000_000_000), BloatSeverity::High);
-        assert_eq!(BloatSeverity::from_bytes(25_000_000_000), BloatSeverity::Critical);
+        assert_eq!(
+            BloatSeverity::from_bytes(2_000_000_000),
+            BloatSeverity::Medium
+        );
+        assert_eq!(
+            BloatSeverity::from_bytes(10_000_000_000),
+            BloatSeverity::High
+        );
+        assert_eq!(
+            BloatSeverity::from_bytes(25_000_000_000),
+            BloatSeverity::Critical
+        );
     }
 
     #[test]
@@ -974,6 +1214,7 @@ mod tests {
                     reclaimable: true,
                     reclaim_hint: "cli-ner clean --category xcode --execute".to_string(),
                     requires_sudo: false,
+                    size_is_estimate: false,
                     details: Some("Cached build indexes".to_string()),
                 },
                 BloatSource {
@@ -985,6 +1226,7 @@ mod tests {
                     reclaimable: true,
                     reclaim_hint: "cli-ner docker wizard".to_string(),
                     requires_sudo: false,
+                    size_is_estimate: false,
                     details: None,
                 },
             ],
@@ -996,5 +1238,72 @@ mod tests {
         assert!(formatted.contains("Docker VM disk"));
         assert!(formatted.contains("Xcode DerivedData"));
         assert!(formatted.contains("40.00 GB") || formatted.contains("40 GB"));
+    }
+
+    fn source_at(path: &str, size: u64, estimate: bool) -> BloatSource {
+        BloatSource {
+            category: BloatCategory::UserCaches,
+            label: path.to_string(),
+            size_bytes: size,
+            path_or_command: path.to_string(),
+            severity: BloatSeverity::from_bytes(size),
+            reclaimable: true,
+            reclaim_hint: String::new(),
+            requires_sudo: false,
+            size_is_estimate: estimate,
+            details: None,
+        }
+    }
+
+    /// `~/Library/Caches` is reported whole *and* broken down per package manager.
+    /// The headline total must count those gigabytes once, not once per row.
+    #[test]
+    fn test_total_counts_nested_locations_once() {
+        let sources = [
+            source_at("~/Library/Caches", 5_000_000_000, false),
+            source_at("~/Library/Caches/Homebrew", 2_000_000_000, false),
+            source_at("~/Library/Caches/pip", 1_000_000_000, false),
+            source_at("~/.gradle/caches", 3_000_000_000, false),
+        ];
+
+        let total = non_overlapping_total(&sources.iter().collect::<Vec<_>>());
+        assert_eq!(
+            total, 8_000_000_000,
+            "the two caches nested under ~/Library/Caches must be absorbed by it"
+        );
+    }
+
+    /// A sibling that merely shares a name prefix is a different directory entirely.
+    #[test]
+    fn test_total_does_not_absorb_name_prefix_siblings() {
+        let sources = [
+            source_at("~/Library/Caches", 1_000_000_000, false),
+            source_at("~/Library/CachesOld", 500_000_000, false),
+        ];
+
+        let total = non_overlapping_total(&sources.iter().collect::<Vec<_>>());
+        assert_eq!(total, 1_500_000_000);
+    }
+
+    /// Rows whose size could not be measured must never inflate a total.
+    #[test]
+    fn test_total_excludes_unmeasurable_rows() {
+        let mut tm = source_at("tmutil listlocalsnapshotdates", 0, true);
+        tm.category = BloatCategory::TimeMachineSnapshots;
+
+        let sources = [source_at("~/.gradle/caches", 3_000_000_000, false), tm];
+        let total = non_overlapping_total(&sources.iter().collect::<Vec<_>>());
+        assert_eq!(total, 3_000_000_000);
+    }
+
+    /// Non-path rows (docker/tmutil queries) cannot overlap anything and always count.
+    #[test]
+    fn test_total_keeps_non_path_sources() {
+        let sources = [
+            source_at("~/Library/Caches", 1_000_000_000, false),
+            source_at("docker:build-cache", 2_000_000_000, false),
+        ];
+        let total = non_overlapping_total(&sources.iter().collect::<Vec<_>>());
+        assert_eq!(total, 3_000_000_000);
     }
 }

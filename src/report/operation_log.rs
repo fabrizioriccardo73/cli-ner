@@ -23,10 +23,16 @@ pub enum ActionStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanedItem {
+    /// Where the item lived before the operation.
     pub path: String,
     pub size_bytes: u64,
     pub action: ActionType,
     pub status: ActionStatus,
+    /// For trashed items: the exact location inside `~/.Trash`. Recorded so the audit
+    /// log alone is enough to put a file back, since a plain rename into the Trash
+    /// carries no Finder "Put Back" metadata.
+    #[serde(default)]
+    pub trashed_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,7 +42,11 @@ pub struct OperationRecord {
     pub command: String,
     pub dry_run: bool,
     pub category: String,
+    /// Bytes that left the volume immediately (permanent deletes, external tools).
     pub total_bytes_freed: u64,
+    /// Bytes moved into `~/.Trash` — still occupying disk until the Trash is emptied.
+    #[serde(default)]
+    pub total_bytes_trashed: u64,
     pub total_items_count: usize,
     pub duration_ms: u64,
     pub items: Vec<CleanedItem>,
@@ -51,6 +61,7 @@ impl OperationRecord {
             dry_run,
             category: category.to_string(),
             total_bytes_freed: 0,
+            total_bytes_trashed: 0,
             total_items_count: 0,
             duration_ms: 0,
             items: Vec::new(),
@@ -63,9 +74,15 @@ impl OperationRecord {
         size_bytes: u64,
         action: ActionType,
         status: ActionStatus,
+        trashed_to: Option<String>,
     ) {
         if matches!(status, ActionStatus::Success) {
-            self.total_bytes_freed += size_bytes;
+            match action {
+                // A move to the Trash does not free anything yet, so it is tracked
+                // separately and never folded into `total_bytes_freed`.
+                ActionType::Trash => self.total_bytes_trashed += size_bytes,
+                _ => self.total_bytes_freed += size_bytes,
+            }
         }
         self.total_items_count += 1;
         self.items.push(CleanedItem {
@@ -73,6 +90,7 @@ impl OperationRecord {
             size_bytes,
             action,
             status,
+            trashed_to,
         });
     }
 
