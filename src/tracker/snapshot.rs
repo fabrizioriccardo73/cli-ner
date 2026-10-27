@@ -91,7 +91,11 @@ pub fn scan_path_tree<P: AsRef<Path>>(
 
     if path.is_file() || path.is_symlink() {
         if let Ok(meta) = fs::symlink_metadata(path) {
-            let size = if meta.is_file() { get_allocated_size(&meta) } else { 0 };
+            let size = if meta.is_file() {
+                get_allocated_size(&meta)
+            } else {
+                0
+            };
             items.insert(
                 contracted.clone(),
                 SnapshotItem {
@@ -175,7 +179,13 @@ pub fn create_snapshot(
     let id = if let Some(ref custom_name) = name {
         let sanitized: String = custom_name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         format!("{}_{}", timestamp_str, sanitized)
     } else {
@@ -322,9 +332,7 @@ pub fn list_snapshots() -> Result<Vec<DiskSnapshot>> {
 pub fn load_snapshot(id_or_name: &str) -> Result<DiskSnapshot> {
     let snapshots = list_snapshots()?;
     if let Some(found) = snapshots.iter().find(|s| {
-        s.id == id_or_name
-            || s.id.starts_with(id_or_name)
-            || s.name.as_deref() == Some(id_or_name)
+        s.id == id_or_name || s.id.starts_with(id_or_name) || s.name.as_deref() == Some(id_or_name)
     }) {
         return Ok(found.clone());
     }
@@ -350,9 +358,7 @@ pub fn delete_snapshot(id_or_name: &str) -> Result<bool> {
 
     let snapshots = list_snapshots()?;
     if let Some(target) = snapshots.iter().find(|s| {
-        s.id == id_or_name
-            || s.id.starts_with(id_or_name)
-            || s.name.as_deref() == Some(id_or_name)
+        s.id == id_or_name || s.id.starts_with(id_or_name) || s.name.as_deref() == Some(id_or_name)
     }) {
         let file_path = dir.join(format!("{}.json", target.id));
         if file_path.exists() {

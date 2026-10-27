@@ -241,8 +241,12 @@ pub fn compare_snapshots(old: &DiskSnapshot, new: &DiskSnapshot) -> SnapshotDiff
 /// Compare a saved snapshot against the current live filesystem state
 pub fn compare_with_live(old: &DiskSnapshot, max_depth: usize) -> Result<SnapshotDiffReport> {
     let root_path_buf = expand_tilde(&old.root_path);
-    let live_snapshot =
-        create_snapshot(Some(root_path_buf), Some("live_current".into()), max_depth, false)?;
+    let live_snapshot = create_snapshot(
+        Some(root_path_buf),
+        Some("live_current".into()),
+        max_depth,
+        false,
+    )?;
 
     let mut report = compare_snapshots(old, &live_snapshot);
     report.is_live_comparison = true;
@@ -288,16 +292,26 @@ pub fn format_diff_table_with_width(
             "Disk Differential Comparison: {}{} [{}] vs {}{} [{}]",
             report.old_id.cyan().bold(),
             old_label,
-            report.old_timestamp.format("%Y-%m-%d %H:%M").to_string().dimmed(),
+            report
+                .old_timestamp
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+                .dimmed(),
             report.new_id.green().bold(),
             new_label,
-            report.new_timestamp.format("%Y-%m-%d %H:%M").to_string().dimmed(),
+            report
+                .new_timestamp
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+                .dimmed(),
         )
         .bold()
     ));
 
     // 2. Global Disk Space Delta Banner
-    if let (Some(old_avail), Some(new_avail)) = (report.old_disk_available, report.new_disk_available) {
+    if let (Some(old_avail), Some(new_avail)) =
+        (report.old_disk_available, report.new_disk_available)
+    {
         let delta_avail = (new_avail as i64) - (old_avail as i64);
         let delta_str = delta_avail_str(delta_avail);
 
@@ -412,11 +426,15 @@ pub fn format_diff_table_with_width(
     // 4. Growth Summary and Top Offenders
     out.push_str(&format!(
         "\n📈 Total Space Growth:    {}\n",
-        format!("+{}", format_bytes(report.total_growth_bytes)).red().bold()
+        format!("+{}", format_bytes(report.total_growth_bytes))
+            .red()
+            .bold()
     ));
     out.push_str(&format!(
         "📉 Total Space Reclaimed: {}\n",
-        format!("-{}", format_bytes(report.total_reduction_bytes)).green().bold()
+        format!("-{}", format_bytes(report.total_reduction_bytes))
+            .green()
+            .bold()
     ));
     out.push_str(&format!(
         "⚖️  Net Size Change:       {}\n",
@@ -427,7 +445,11 @@ pub fn format_diff_table_with_width(
     let top_grower = filtered_entries
         .iter()
         .filter(|e| e.delta_bytes > 0 && e.path != "~" && e.path != "/")
-        .filter(|e| !filtered_entries.iter().any(|other| is_path_ancestor(&e.path, &other.path) && other.delta_bytes > 0))
+        .filter(|e| {
+            !filtered_entries
+                .iter()
+                .any(|other| is_path_ancestor(&e.path, &other.path) && other.delta_bytes > 0)
+        })
         .max_by_key(|e| e.delta_bytes)
         .or_else(|| {
             filtered_entries
@@ -482,7 +504,8 @@ pub fn format_diff_table_with_width(
             } else {
                 out.push_str(&format!(
                     "   {} (Disk Free Δ {}) vs Tracked Files (Δ {})\n",
-                    "More disk space was freed than what was recorded in individual files:".dimmed(),
+                    "More disk space was freed than what was recorded in individual files:"
+                        .dimmed(),
                     delta_avail_str(report.disk_available_delta.unwrap_or(0)),
                     format_delta_bytes(report.net_delta_bytes),
                 ));
@@ -536,17 +559,29 @@ pub fn format_diff_table_with_width(
 
 fn delta_avail_str(delta: i64) -> String {
     if delta < 0 {
-        format!("-{}", format_bytes(delta.unsigned_abs())).red().bold().to_string()
+        format!("-{}", format_bytes(delta.unsigned_abs()))
+            .red()
+            .bold()
+            .to_string()
     } else {
-        format!("+{}", format_bytes(delta as u64)).green().bold().to_string()
+        format!("+{}", format_bytes(delta as u64))
+            .green()
+            .bold()
+            .to_string()
     }
 }
 
 fn format_delta_bytes(delta: i64) -> String {
     if delta > 0 {
-        format!("+{}", format_bytes(delta as u64)).red().bold().to_string()
+        format!("+{}", format_bytes(delta as u64))
+            .red()
+            .bold()
+            .to_string()
     } else if delta < 0 {
-        format!("-{}", format_bytes(delta.unsigned_abs())).green().bold().to_string()
+        format!("-{}", format_bytes(delta.unsigned_abs()))
+            .green()
+            .bold()
+            .to_string()
     } else {
         "0 B".dimmed().to_string()
     }
@@ -574,70 +609,97 @@ mod tests {
     fn test_hierarchical_no_double_counting() {
         let mut old_items = HashMap::new();
         // Root ~: 100 GB
-        old_items.insert("~".to_string(), SnapshotItem {
-            path: "~".to_string(),
-            size_bytes: 100_000_000_000,
-            file_count: 1000,
-            is_dir: true,
-        });
+        old_items.insert(
+            "~".to_string(),
+            SnapshotItem {
+                path: "~".to_string(),
+                size_bytes: 100_000_000_000,
+                file_count: 1000,
+                is_dir: true,
+            },
+        );
         // ~/OrbStack: 60 GB
-        old_items.insert("~/OrbStack".to_string(), SnapshotItem {
-            path: "~/OrbStack".to_string(),
-            size_bytes: 60_000_000_000,
-            file_count: 500,
-            is_dir: true,
-        });
+        old_items.insert(
+            "~/OrbStack".to_string(),
+            SnapshotItem {
+                path: "~/OrbStack".to_string(),
+                size_bytes: 60_000_000_000,
+                file_count: 500,
+                is_dir: true,
+            },
+        );
         // ~/OrbStack/docker: 60 GB
-        old_items.insert("~/OrbStack/docker".to_string(), SnapshotItem {
-            path: "~/OrbStack/docker".to_string(),
-            size_bytes: 60_000_000_000,
-            file_count: 500,
-            is_dir: true,
-        });
+        old_items.insert(
+            "~/OrbStack/docker".to_string(),
+            SnapshotItem {
+                path: "~/OrbStack/docker".to_string(),
+                size_bytes: 60_000_000_000,
+                file_count: 500,
+                is_dir: true,
+            },
+        );
         // ~/Downloads: 10 GB
-        old_items.insert("~/Downloads".to_string(), SnapshotItem {
-            path: "~/Downloads".to_string(),
-            size_bytes: 10_000_000_000,
-            file_count: 10,
-            is_dir: true,
-        });
+        old_items.insert(
+            "~/Downloads".to_string(),
+            SnapshotItem {
+                path: "~/Downloads".to_string(),
+                size_bytes: 10_000_000_000,
+                file_count: 10,
+                is_dir: true,
+            },
+        );
 
         let mut new_items = HashMap::new();
         // Root ~: 52 GB (-48 GB net)
-        new_items.insert("~".to_string(), SnapshotItem {
-            path: "~".to_string(),
-            size_bytes: 52_000_000_000,
-            file_count: 511,
-            is_dir: true,
-        });
+        new_items.insert(
+            "~".to_string(),
+            SnapshotItem {
+                path: "~".to_string(),
+                size_bytes: 52_000_000_000,
+                file_count: 511,
+                is_dir: true,
+            },
+        );
         // ~/OrbStack: 10 GB (-50 GB)
-        new_items.insert("~/OrbStack".to_string(), SnapshotItem {
-            path: "~/OrbStack".to_string(),
-            size_bytes: 10_000_000_000,
-            file_count: 10,
-            is_dir: true,
-        });
+        new_items.insert(
+            "~/OrbStack".to_string(),
+            SnapshotItem {
+                path: "~/OrbStack".to_string(),
+                size_bytes: 10_000_000_000,
+                file_count: 10,
+                is_dir: true,
+            },
+        );
         // ~/OrbStack/docker: 10 GB (-50 GB)
-        new_items.insert("~/OrbStack/docker".to_string(), SnapshotItem {
-            path: "~/OrbStack/docker".to_string(),
-            size_bytes: 10_000_000_000,
-            file_count: 10,
-            is_dir: true,
-        });
+        new_items.insert(
+            "~/OrbStack/docker".to_string(),
+            SnapshotItem {
+                path: "~/OrbStack/docker".to_string(),
+                size_bytes: 10_000_000_000,
+                file_count: 10,
+                is_dir: true,
+            },
+        );
         // ~/Downloads: 12 GB (+2 GB)
-        new_items.insert("~/Downloads".to_string(), SnapshotItem {
-            path: "~/Downloads".to_string(),
-            size_bytes: 12_000_000_000,
-            file_count: 11,
-            is_dir: true,
-        });
+        new_items.insert(
+            "~/Downloads".to_string(),
+            SnapshotItem {
+                path: "~/Downloads".to_string(),
+                size_bytes: 12_000_000_000,
+                file_count: 11,
+                is_dir: true,
+            },
+        );
         // ~/Downloads/app.dmg: 2 GB (✨ NEW +2 GB)
-        new_items.insert("~/Downloads/app.dmg".to_string(), SnapshotItem {
-            path: "~/Downloads/app.dmg".to_string(),
-            size_bytes: 2_000_000_000,
-            file_count: 1,
-            is_dir: false,
-        });
+        new_items.insert(
+            "~/Downloads/app.dmg".to_string(),
+            SnapshotItem {
+                path: "~/Downloads/app.dmg".to_string(),
+                size_bytes: 2_000_000_000,
+                file_count: 1,
+                is_dir: false,
+            },
+        );
 
         let old = DiskSnapshot {
             id: "snap1".to_string(),
@@ -832,12 +894,15 @@ mod tests {
         let new_items = HashMap::new();
         // Suppose 100 GB was deleted
         let mut old_items = HashMap::new();
-        old_items.insert("~/OrbStack/docker".to_string(), SnapshotItem {
-            path: "~/OrbStack/docker".to_string(),
-            size_bytes: 100_000_000_000,
-            file_count: 100,
-            is_dir: true,
-        });
+        old_items.insert(
+            "~/OrbStack/docker".to_string(),
+            SnapshotItem {
+                path: "~/OrbStack/docker".to_string(),
+                size_bytes: 100_000_000_000,
+                file_count: 100,
+                is_dir: true,
+            },
+        );
 
         let mut old = old;
         old.items = old_items;
@@ -870,6 +935,8 @@ mod tests {
         assert_eq!(diff.unaccounted_delta_bytes, Some(86_000_000_000));
 
         let formatted = format_diff_table(&diff, 10, 1_000_000);
-        assert!(formatted.contains("Tracked files were deleted, but disk free space did not increase accordingly"));
+        assert!(formatted.contains(
+            "Tracked files were deleted, but disk free space did not increase accordingly"
+        ));
     }
 }

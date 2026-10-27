@@ -327,6 +327,12 @@ pub struct MaintainArgs {
     #[arg(long)]
     pub allow_admin: bool,
 
+    /// Also run the heavy rebuilds (Spotlight index, locate database). They are
+    /// never part of a normal run, and each one still asks for its own
+    /// confirmation, even with --yes.
+    #[arg(long)]
+    pub include_heavy: bool,
+
     /// Category to target: all, system-index, extended-cache, disk-maintenance, system-state
     #[arg(short, long, default_value = "all")]
     pub category: String,

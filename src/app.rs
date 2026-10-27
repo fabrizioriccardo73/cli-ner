@@ -1597,8 +1597,11 @@ impl App {
                 .join(" && ");
 
             let status = match action.preflight() {
-                Ok(()) => "ready".green().to_string(),
                 Err(reason) => format!("⚠️ {}", reason).yellow().to_string(),
+                Ok(()) if action.is_opt_in() && !args.include_heavy => {
+                    "opt-in: needs --include-heavy".cyan().to_string()
+                }
+                Ok(()) => "ready".green().to_string(),
             };
 
             table.add_row(Row::from(vec![
@@ -1613,6 +1616,30 @@ impl App {
         }
 
         println!("\n📋 Maintenance Actions:\n{}", table);
+
+        // Heavy rebuilds (Fase M5) never ride along in a normal run: they need the
+        // dedicated flag first, and later their own confirmation.
+        let (available, heavy_blocked): (Vec<_>, Vec<_>) = available
+            .into_iter()
+            .partition(|a| !a.is_opt_in() || args.include_heavy);
+
+        if !heavy_blocked.is_empty() {
+            let names = heavy_blocked
+                .iter()
+                .map(|a| a.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "{}",
+                "🧱 SKIPPED (heavy rebuilds, opt-in only):".bold().yellow()
+            );
+            println!("   {}", names.white());
+            println!(
+                "{}",
+                "   Re-run with --include-heavy --allow-admin to run them; each one asks for its own confirmation.\n"
+                    .cyan()
+            );
+        }
 
         // "No root by default" (same rule `clean` follows): an action needing elevated
         // privileges never runs unless the caller explicitly opted in.
@@ -1638,7 +1665,11 @@ impl App {
         }
 
         if runnable.is_empty() {
-            println!("{}", "Nothing left to do without --allow-admin.".yellow());
+            println!(
+                "{}",
+                "Nothing left to run with the flags given (see the skipped actions above)."
+                    .yellow()
+            );
             return Ok(());
         }
 
@@ -1646,10 +1677,15 @@ impl App {
             println!(
                 "\n💡 To actually run these actions, run:\n   {}",
                 format!(
-                    "cli-ner maintain --category {}{} --execute",
+                    "cli-ner maintain --category {}{}{} --execute",
                     args.category,
                     if args.allow_admin {
                         " --allow-admin"
+                    } else {
+                        ""
+                    },
+                    if args.include_heavy {
+                        " --include-heavy"
                     } else {
                         ""
                     }
@@ -1687,6 +1723,35 @@ impl App {
             }
         }
 
+        // Each heavy rebuild gets its own yes/no, which `--yes` does not skip:
+        // `--include-heavy` means "I may want these", this prompt means "this one,
+        // now". Without a terminal the prompt fails, which counts as a no.
+        let mut declined_heavy: Vec<&dyn MaintenanceAction> = Vec::new();
+        let runnable: Vec<&dyn MaintenanceAction> = runnable
+            .into_iter()
+            .filter(|action| {
+                // A failing preflight is reported as Skipped below; no point asking.
+                if !action.is_opt_in() || action.preflight().is_err() {
+                    return true;
+                }
+                println!(
+                    "\n🧱 {}\n   {}",
+                    action.name().bold(),
+                    action.description().dimmed()
+                );
+                let confirmed = Confirm::new()
+                    .with_prompt(format!("Run \"{}\" now?", action.name()))
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
+                if !confirmed {
+                    println!("   {}", "⏭️  Not confirmed — skipped.".yellow());
+                    declined_heavy.push(*action);
+                }
+                confirmed
+            })
+            .collect();
+
         // One native `sudo` prompt up front; each admin command then reuses those
         // credentials non-interactively (`sudo -n`). If the user declines, or there
         // is no terminal to prompt on, admin actions are skipped — not failed one
@@ -1712,6 +1777,17 @@ impl App {
         let mut succeeded = 0usize;
         let mut failed = 0usize;
         let mut skipped = 0usize;
+
+        for action in &declined_heavy {
+            skipped += 1;
+            op_record.add_item(
+                action.name().to_string(),
+                0,
+                ActionType::ExternalCommand,
+                ActionStatus::Skipped("heavy rebuild not confirmed".into()),
+                None,
+            );
+        }
 
         for action in &runnable {
             if action.requires_admin() && !admin_granted {
@@ -1779,7 +1855,7 @@ impl App {
             println!(
                 "⏭️  Skipped:          {} {}",
                 skipped.to_string().yellow(),
-                "(a safety precondition wasn't met, or admin rights were not granted)".dimmed()
+                "(a safety precondition wasn't met, admin rights were not granted, or a heavy rebuild was declined)".dimmed()
             );
         }
         if failed > 0 {

@@ -109,4 +109,3 @@ pub fn format_large_files_table_with_width(
         table
     )
 }
-

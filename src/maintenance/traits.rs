@@ -183,6 +183,14 @@ pub trait MaintenanceAction: Send + Sync {
     /// what was removed) or is permanent (e.g. a deleted restore point).
     fn is_reversible(&self) -> bool;
 
+    /// Heavy actions (hours of re-indexing, a full-disk scan) that must never
+    /// ride along in a normal run. `maintain` only runs them with the dedicated
+    /// `--include-heavy` flag, and then asks for each one separately — a prompt
+    /// `--yes` does not skip.
+    fn is_opt_in(&self) -> bool {
+        false
+    }
+
     /// Whether the binary/service this action needs is actually present on
     /// this machine.
     fn is_available(&self) -> bool {

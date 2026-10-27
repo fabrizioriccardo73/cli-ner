@@ -218,7 +218,6 @@ impl DockerInteractive {
         table.to_string()
     }
 
-
     /// Main interactive Docker dashboard and management menu
     pub fn run_interactive_menu() -> Result<()> {
         if !DockerClient::is_available() {

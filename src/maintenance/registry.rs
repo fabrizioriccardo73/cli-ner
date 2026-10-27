@@ -2,17 +2,18 @@ use crate::maintenance::disk_maintenance::{
     ApfsVerifyAction, SmartStatusCheckAction, ThinLocalSnapshotsAction,
 };
 use crate::maintenance::extended_cache::{FontCacheResetAction, QuickLookCacheResetAction};
+use crate::maintenance::heavy_rebuild::{LocateDatabaseRebuildAction, SpotlightRebuildAction};
 use crate::maintenance::privileged_cache::{
     CoreDumpsAction, CupsSpoolCacheAction, SystemServiceCachesAction,
 };
 use crate::maintenance::system_index::{LaunchServicesRebuildAction, MailIndexVacuumAction};
+use crate::maintenance::system_state::{FlushDnsCacheAction, PurgeMemoryAction};
 use crate::maintenance::traits::{ActionCategory, MaintenanceAction};
 
 /// Registry of all available maintenance actions.
 ///
-/// Fase M1 (System Index rebuilds), Fase M2 (disk/Time Machine maintenance)
-/// and Fase M3 (command-based extended caches) are in — see
-/// `docs/MAINTENANCE_ROADMAP.md`. System-state actions land next.
+/// Covers Fasi M1-M5 of `docs/MAINTENANCE_ROADMAP.md`. The M5 rebuilds are
+/// registered like the rest but are opt-in (`MaintenanceAction::is_opt_in`).
 pub struct MaintenanceRegistry {
     actions: Vec<Box<dyn MaintenanceAction>>,
 }
@@ -30,6 +31,10 @@ impl MaintenanceRegistry {
             Box::new(SystemServiceCachesAction),
             Box::new(CupsSpoolCacheAction),
             Box::new(CoreDumpsAction),
+            Box::new(FlushDnsCacheAction),
+            Box::new(PurgeMemoryAction),
+            Box::new(SpotlightRebuildAction),
+            Box::new(LocateDatabaseRebuildAction),
         ];
 
         Self { actions }
@@ -86,15 +91,42 @@ mod tests {
     }
 
     #[test]
+    fn test_registry_has_the_fase_m4_system_state_actions() {
+        let registry = MaintenanceRegistry::new();
+        let names: Vec<&str> = registry.all().iter().map(|a| a.name()).collect();
+        assert!(names.contains(&"Flush DNS Cache"));
+        assert!(names.contains(&"Purge Inactive Memory"));
+    }
+
+    #[test]
+    fn test_only_the_fase_m5_rebuilds_are_opt_in() {
+        let registry = MaintenanceRegistry::new();
+        let mut opt_in: Vec<&str> = registry
+            .all()
+            .iter()
+            .filter(|a| a.is_opt_in())
+            .map(|a| a.name())
+            .collect();
+        opt_in.sort();
+        assert_eq!(
+            opt_in,
+            vec!["Rebuild Spotlight Index", "Rebuild locate Database"]
+        );
+    }
+
+    #[test]
     fn test_find_by_category_filters_correctly() {
         let registry = MaintenanceRegistry::new();
         let system_index = registry.find_by_category(ActionCategory::SystemIndex);
-        assert_eq!(system_index.len(), 2);
+        assert_eq!(system_index.len(), 4);
 
         let disk_maintenance = registry.find_by_category(ActionCategory::DiskMaintenance);
         assert_eq!(disk_maintenance.len(), 4);
 
         let extended_cache = registry.find_by_category(ActionCategory::ExtendedCache);
         assert_eq!(extended_cache.len(), 4);
+
+        let system_state = registry.find_by_category(ActionCategory::SystemState);
+        assert_eq!(system_state.len(), 2);
     }
 }

@@ -43,7 +43,9 @@ mod tests {
         let mut table = create_styled_table_with_width(80);
         table.set_header(vec![Cell::new("Col1"), Cell::new("Col2")]);
         table.add_row(vec![
-            Cell::new("Very long content that should be dynamically wrapped inside the table cells"),
+            Cell::new(
+                "Very long content that should be dynamically wrapped inside the table cells",
+            ),
             Cell::new("Short content"),
         ]);
         let rendered = table.to_string();

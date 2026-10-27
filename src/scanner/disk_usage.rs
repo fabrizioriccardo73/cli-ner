@@ -117,4 +117,3 @@ pub fn format_scanned_table_with_width(
         table
     )
 }
-

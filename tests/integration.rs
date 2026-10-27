@@ -175,7 +175,9 @@ fn test_cli_projects_help() {
 #[test]
 fn test_cli_projects_scan_json() {
     let output = Command::new("cargo")
-        .args(["run", "--", "projects", "--path", ".", "--all", "--format", "json"])
+        .args([
+            "run", "--", "projects", "--path", ".", "--all", "--format", "json",
+        ])
         .output()
         .expect("Failed to execute cargo run -- projects --format json");
 
@@ -271,7 +273,16 @@ fn test_cli_phantom_alias() {
 #[test]
 fn test_cli_snapshot_create_and_list() {
     let output = Command::new("cargo")
-        .args(["run", "--", "snapshot", "create", "--name", "test-ci-snap", "--path", "."])
+        .args([
+            "run",
+            "--",
+            "snapshot",
+            "create",
+            "--name",
+            "test-ci-snap",
+            "--path",
+            ".",
+        ])
         .output()
         .expect("Failed to execute cargo run -- snapshot create");
 
@@ -298,6 +309,7 @@ fn test_cli_diff() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Disk Differential Comparison") || stdout.contains("Baseline snapshot"));
+    assert!(
+        stdout.contains("Disk Differential Comparison") || stdout.contains("Baseline snapshot")
+    );
 }
-

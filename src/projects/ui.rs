@@ -124,8 +124,11 @@ pub fn render_projects_table_with_width(projects: &[DiscoveredProject], width: u
                 Cell::new(days_str).fg(Color::Green)
             };
 
-            let type_cell =
-                Cell::new(format!("{} {}", p.project_type.icon(), p.project_type.name()));
+            let type_cell = Cell::new(format!(
+                "{} {}",
+                p.project_type.icon(),
+                p.project_type.name()
+            ));
 
             let project_cell =
                 Cell::new(format!("{}\n{}", p.name.bold(), contracted_path.dimmed()));
@@ -161,7 +164,6 @@ pub fn render_projects_table_with_width(projects: &[DiscoveredProject], width: u
 
     format!("{}{}", table, summary)
 }
-
 
 /// Flattened item for interactive selection
 pub struct SelectableArtifact<'a> {
@@ -211,8 +213,7 @@ pub fn select_artifacts_interactive<'a>(
 
     println!(
         "\n{}",
-        "🔘 Space = toggle selection, Enter = confirm, A = all, Esc = cancel"
-            .dimmed()
+        "🔘 Space = toggle selection, Enter = confirm, A = all, Esc = cancel".dimmed()
     );
 
     let selections = MultiSelect::new()
@@ -245,7 +246,10 @@ pub fn prompt_confirm_clean(
 
     let total_size: u64 = targets.iter().map(|(_, a)| a.size_bytes).sum();
 
-    println!("\n{}", "⚠️ Target build artifacts to clean:".bold().yellow());
+    println!(
+        "\n{}",
+        "⚠️ Target build artifacts to clean:".bold().yellow()
+    );
     for (p, a) in targets {
         println!(
             "  • {} {} -> {}/{} ({})",
@@ -327,4 +331,3 @@ mod tests {
         assert!(wide_output.contains("website"));
     }
 }
-
