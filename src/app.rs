@@ -1673,8 +1673,20 @@ impl App {
                         ActionStatus::Skipped(_) => skipped += 1,
                         ActionStatus::Failed(_) => failed += 1,
                     }
+
+                    // Diagnostic actions (SMART status, APFS verify, …) are only
+                    // useful if their captured stdout actually reaches the user,
+                    // not just a "succeeded" tally.
+                    if let Some(output) = &outcome.output {
+                        println!("   ℹ️  {}: {}", outcome.action_name.bold(), output);
+                    }
+
+                    let logged_label = match &outcome.output {
+                        Some(output) => format!("{}: {} -> {}", outcome.action_name, commands_label, output),
+                        None => format!("{}: {}", outcome.action_name, commands_label),
+                    };
                     op_record.add_item(
-                        format!("{}: {}", outcome.action_name, commands_label),
+                        logged_label,
                         0,
                         ActionType::ExternalCommand,
                         outcome.status,

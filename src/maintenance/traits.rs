@@ -30,7 +30,13 @@ impl SystemCommand {
         }
     }
 
-    fn run(&self) -> Result<()> {
+    /// Run the command and return its captured, trimmed stdout.
+    ///
+    /// Several maintenance actions are read-only diagnostics (SMART status,
+    /// volume verification) where the output *is* the result — not just
+    /// whether the process exited zero — so the executor needs it, not just
+    /// a pass/fail bit.
+    fn run(&self) -> Result<String> {
         let output = Command::new(self.program)
             .args(&self.args)
             .output()
@@ -45,7 +51,7 @@ impl SystemCommand {
                 stderr.trim()
             );
         }
-        Ok(())
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 }
 
@@ -124,6 +130,10 @@ pub struct MaintenanceOutcome {
     pub status: ActionStatus,
     /// Rendered commands actually run, in order — for the audit trail.
     pub commands_run: Vec<String>,
+    /// Captured stdout from the commands that produced any — the whole point
+    /// of a read-only diagnostic action (e.g. SMART status). `None` for
+    /// actions whose commands are silent on success.
+    pub output: Option<String>,
 }
 
 /// Core trait implemented by every maintenance action.
@@ -183,6 +193,7 @@ pub trait MaintenanceAction: Send + Sync {
                 action_name: self.name().to_string(),
                 status: ActionStatus::Skipped(reason),
                 commands_run: Vec::new(),
+                output: None,
             });
         }
         run_system_commands(self.name(), self.commands())
@@ -200,15 +211,24 @@ pub fn run_system_commands(
     commands: Vec<SystemCommand>,
 ) -> Result<MaintenanceOutcome> {
     let mut commands_run = Vec::new();
+    let mut outputs = Vec::new();
 
     for command in &commands {
         commands_run.push(command.display());
-        if let Err(err) = command.run() {
-            return Ok(MaintenanceOutcome {
-                action_name: action_name.to_string(),
-                status: ActionStatus::Failed(err.to_string()),
-                commands_run,
-            });
+        match command.run() {
+            Ok(stdout) => {
+                if !stdout.is_empty() {
+                    outputs.push(stdout);
+                }
+            }
+            Err(err) => {
+                return Ok(MaintenanceOutcome {
+                    action_name: action_name.to_string(),
+                    status: ActionStatus::Failed(err.to_string()),
+                    commands_run,
+                    output: (!outputs.is_empty()).then(|| outputs.join("\n")),
+                });
+            }
         }
     }
 
@@ -216,6 +236,7 @@ pub fn run_system_commands(
         action_name: action_name.to_string(),
         status: ActionStatus::Success,
         commands_run,
+        output: (!outputs.is_empty()).then(|| outputs.join("\n")),
     })
 }
 
@@ -309,5 +330,36 @@ mod tests {
     fn test_system_command_display_never_quotes_or_shells_out() {
         let cmd = SystemCommand::new("/usr/bin/true", vec!["-x".to_string(), "a b".to_string()]);
         assert_eq!(cmd.display(), "/usr/bin/true -x a b");
+    }
+
+    #[test]
+    fn test_output_is_captured_from_stdout() {
+        struct EchoAction;
+        impl MaintenanceAction for EchoAction {
+            fn name(&self) -> &'static str {
+                "echo-action"
+            }
+            fn category(&self) -> ActionCategory {
+                ActionCategory::SystemState
+            }
+            fn description(&self) -> &'static str {
+                "echoes a line"
+            }
+            fn risk(&self) -> RiskLevel {
+                RiskLevel::Low
+            }
+            fn is_reversible(&self) -> bool {
+                true
+            }
+            fn commands(&self) -> Vec<SystemCommand> {
+                vec![SystemCommand::new(
+                    "/bin/echo",
+                    vec!["hello-world".to_string()],
+                )]
+            }
+        }
+
+        let outcome = EchoAction.execute().unwrap();
+        assert_eq!(outcome.output, Some("hello-world".to_string()));
     }
 }
