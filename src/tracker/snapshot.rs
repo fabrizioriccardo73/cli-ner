@@ -328,19 +328,49 @@ pub fn list_snapshots() -> Result<Vec<DiskSnapshot>> {
     Ok(snapshots)
 }
 
+/// Pick the one snapshot `id_or_name` refers to: an exact ID or label first,
+/// otherwise an ID prefix that matches exactly one snapshot.
+///
+/// An empty or ambiguous query is an error rather than "the first match": with
+/// `snapshot delete 2026` that used to silently remove whichever came first.
+fn find_snapshot<'a>(snapshots: &'a [DiskSnapshot], id_or_name: &str) -> Result<&'a DiskSnapshot> {
+    if id_or_name.trim().is_empty() {
+        bail!("No snapshot ID or name given.");
+    }
+
+    if let Some(exact) = snapshots
+        .iter()
+        .find(|s| s.id == id_or_name || s.name.as_deref() == Some(id_or_name))
+    {
+        return Ok(exact);
+    }
+
+    let by_prefix: Vec<&DiskSnapshot> = snapshots
+        .iter()
+        .filter(|s| s.id.starts_with(id_or_name))
+        .collect();
+    match by_prefix.as_slice() {
+        [one] => Ok(one),
+        [] => bail!(
+            "Snapshot '{}' not found. Run `cli-ner snapshot list` to view available snapshots.",
+            id_or_name
+        ),
+        many => bail!(
+            "'{}' matches {} snapshots ({}). Use the full ID.",
+            id_or_name,
+            many.len(),
+            many.iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 /// Load a specific snapshot by ID or label
 pub fn load_snapshot(id_or_name: &str) -> Result<DiskSnapshot> {
     let snapshots = list_snapshots()?;
-    if let Some(found) = snapshots.iter().find(|s| {
-        s.id == id_or_name || s.id.starts_with(id_or_name) || s.name.as_deref() == Some(id_or_name)
-    }) {
-        return Ok(found.clone());
-    }
-
-    bail!(
-        "Snapshot '{}' not found. Run `cli-ner snapshot list` to view available snapshots.",
-        id_or_name
-    );
+    find_snapshot(&snapshots, id_or_name).cloned()
 }
 
 /// Get the most recent saved snapshot
@@ -357,14 +387,11 @@ pub fn delete_snapshot(id_or_name: &str) -> Result<bool> {
     }
 
     let snapshots = list_snapshots()?;
-    if let Some(target) = snapshots.iter().find(|s| {
-        s.id == id_or_name || s.id.starts_with(id_or_name) || s.name.as_deref() == Some(id_or_name)
-    }) {
-        let file_path = dir.join(format!("{}.json", target.id));
-        if file_path.exists() {
-            fs::remove_file(file_path)?;
-            return Ok(true);
-        }
+    let target = find_snapshot(&snapshots, id_or_name)?;
+    let file_path = dir.join(format!("{}.json", target.id));
+    if file_path.exists() {
+        fs::remove_file(file_path)?;
+        return Ok(true);
     }
 
     Ok(false)
@@ -436,6 +463,50 @@ pub fn format_snapshots_table_with_width(snapshots: &[DiskSnapshot], width: u16)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snap(id: &str, name: Option<&str>) -> DiskSnapshot {
+        DiskSnapshot {
+            id: id.to_string(),
+            name: name.map(str::to_string),
+            timestamp: Local::now(),
+            root_path: "/".to_string(),
+            total_size_bytes: 0,
+            total_files_count: 0,
+            disk_stats: None,
+            apfs_snapshots_count: None,
+            apfs_snapshots: Vec::new(),
+            items: HashMap::new(),
+        }
+    }
+
+    /// An ambiguous or empty query must never pick "the first one" — that is how
+    /// `snapshot delete 2026` used to remove an arbitrary snapshot.
+    #[test]
+    fn test_find_snapshot_refuses_ambiguous_or_empty_queries() {
+        let all = vec![
+            snap("20261027_101500", None),
+            snap("20261027_113000_before", Some("before")),
+            snap("20261026_090000", None),
+        ];
+
+        assert!(find_snapshot(&all, "2026").is_err());
+        assert!(find_snapshot(&all, "20261027").is_err());
+        assert!(find_snapshot(&all, "").is_err());
+        assert!(find_snapshot(&all, "nope").is_err());
+
+        assert_eq!(
+            find_snapshot(&all, "20261026").unwrap().id,
+            "20261026_090000"
+        );
+        assert_eq!(
+            find_snapshot(&all, "before").unwrap().id,
+            "20261027_113000_before"
+        );
+        assert_eq!(
+            find_snapshot(&all, "20261027_101500").unwrap().id,
+            "20261027_101500"
+        );
+    }
 
     #[test]
     fn test_scan_path_tree() {

@@ -301,9 +301,10 @@ impl App {
             CleanCategory::Cargo,
             CleanCategory::Go,
         ];
+        // No `XcodeArchives` here: archives hold the dSYMs of shipped builds, so they
+        // only go with `--category xcode-archives`.
         let xcode_categories = vec![
             CleanCategory::XcodeDerivedData,
-            CleanCategory::XcodeArchives,
             CleanCategory::XcodeDeviceSupport,
             CleanCategory::XcodeSimulator,
         ];
@@ -363,7 +364,7 @@ impl App {
             }
             other => {
                 anyhow::bail!(
-                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache, browser-cache, browser-offline-data. Never included in `all`: trash, unavailable-simulators, biome, browser-offline-data",
+                        "Unknown category: '{}'. Valid categories: all, dev, xcode, app-caches, user-cache, user-logs, temp-files, brew, npm, pnpm, pip, gradle, maven, cargo, go, xcode-derived-data, xcode-archives, xcode-device-support, xcode-simulator, docker, trash, extended-app-cache, app-support-cache, container-cache, metal-cache, browser-cache, browser-offline-data. Never included in `all`: trash, unavailable-simulators, biome, xcode-archives, browser-offline-data",
                         other
                     );
             }
@@ -1783,20 +1784,28 @@ impl App {
             }
         }
 
-        // Each heavy rebuild gets its own yes/no, which `--yes` does not skip:
-        // `--include-heavy` means "I may want these", this prompt means "this one,
-        // now". Without a terminal the prompt fails, which counts as a no.
-        let mut declined_heavy: Vec<&dyn MaintenanceAction> = Vec::new();
+        // Heavy rebuilds and irreversible actions (deleted snapshots, core dumps) each
+        // get their own yes/no, which `--yes` does not skip: `--yes` means "don't ask
+        // me about the routine ones", this prompt means "this one, now". Without a
+        // terminal the prompt fails, which counts as a no.
+        let mut declined: Vec<(&dyn MaintenanceAction, &'static str)> = Vec::new();
         let runnable: Vec<&dyn MaintenanceAction> = runnable
             .into_iter()
             .filter(|action| {
                 // A failing preflight is reported as Skipped below; no point asking.
-                if !action.is_opt_in() || action.preflight().is_err() {
+                if !action.needs_own_confirmation() || action.preflight().is_err() {
                     return true;
                 }
+                let (icon, warning) = if action.is_reversible() {
+                    ("🧱", "Heavy rebuild: long, CPU- and disk-intensive.")
+                } else {
+                    ("⚠️ ", "IRREVERSIBLE: what this removes cannot be restored.")
+                };
                 println!(
-                    "\n🧱 {}\n   {}",
+                    "\n{} {}\n   {}\n   {}",
+                    icon,
                     action.name().bold(),
+                    warning.bold().red(),
                     action.description().dimmed()
                 );
                 let confirmed = Confirm::new()
@@ -1806,7 +1815,12 @@ impl App {
                     .unwrap_or(false);
                 if !confirmed {
                     println!("   {}", "⏭️  Not confirmed — skipped.".yellow());
-                    declined_heavy.push(*action);
+                    let reason = if action.is_reversible() {
+                        "heavy rebuild not confirmed"
+                    } else {
+                        "irreversible action not confirmed"
+                    };
+                    declined.push((*action, reason));
                 }
                 confirmed
             })
@@ -1838,13 +1852,13 @@ impl App {
         let mut failed = 0usize;
         let mut skipped = 0usize;
 
-        for action in &declined_heavy {
+        for (action, reason) in &declined {
             skipped += 1;
             op_record.add_item(
                 action.name().to_string(),
                 0,
                 ActionType::ExternalCommand,
-                ActionStatus::Skipped("heavy rebuild not confirmed".into()),
+                ActionStatus::Skipped((*reason).into()),
                 None,
             );
         }
@@ -1915,7 +1929,7 @@ impl App {
             println!(
                 "⏭️  Skipped:          {} {}",
                 skipped.to_string().yellow(),
-                "(a safety precondition wasn't met, admin rights were not granted, or a heavy rebuild was declined)".dimmed()
+                "(a safety precondition wasn't met, admin rights were not granted, or an action needing its own confirmation was declined)".dimmed()
             );
         }
         if failed > 0 {

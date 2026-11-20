@@ -84,7 +84,8 @@ pub enum RiskLevel {
 
 impl RiskLevel {
     /// Everything above `Low` interrupts the user for an explicit yes when
-    /// `--execute` is passed — `--yes` is the only way around it.
+    /// `--execute` is passed — `--yes` skips that shared prompt, but never the
+    /// per-action one of [`MaintenanceAction::needs_own_confirmation`].
     pub fn requires_confirmation(&self) -> bool {
         !matches!(self, RiskLevel::Low)
     }
@@ -189,6 +190,13 @@ pub trait MaintenanceAction: Send + Sync {
     /// `--yes` does not skip.
     fn is_opt_in(&self) -> bool {
         false
+    }
+
+    /// Whether `maintain` must ask for this action on its own, even with `--yes`:
+    /// heavy rebuilds, and anything irreversible (a deleted snapshot or core dump
+    /// cannot be brought back, so a blanket `--yes` is not consent enough).
+    fn needs_own_confirmation(&self) -> bool {
+        self.is_opt_in() || !self.is_reversible()
     }
 
     /// Whether the binary/service this action needs is actually present on
@@ -340,6 +348,39 @@ mod tests {
     fn test_failing_command_is_reported_not_panicked() {
         let outcome = FailingAction.execute().unwrap();
         assert!(matches!(outcome.status, ActionStatus::Failed(_)));
+    }
+
+    /// Irreversible actions are asked about one by one; `--yes` alone never runs them.
+    #[test]
+    fn test_irreversible_actions_need_their_own_confirmation() {
+        struct Irreversible;
+        impl MaintenanceAction for Irreversible {
+            fn name(&self) -> &'static str {
+                "irreversible"
+            }
+            fn category(&self) -> ActionCategory {
+                ActionCategory::DiskMaintenance
+            }
+            fn description(&self) -> &'static str {
+                "deletes something for good"
+            }
+            fn risk(&self) -> RiskLevel {
+                RiskLevel::Medium
+            }
+            fn is_reversible(&self) -> bool {
+                false
+            }
+            fn commands(&self) -> Vec<SystemCommand> {
+                Vec::new()
+            }
+        }
+
+        assert!(Irreversible.needs_own_confirmation());
+        let routine = FakeAction {
+            risk: RiskLevel::Low,
+            admin: false,
+        };
+        assert!(!routine.needs_own_confirmation());
     }
 
     #[test]

@@ -62,7 +62,15 @@ impl Cleaner for XcodeArchivesCleaner {
     }
 
     fn description(&self) -> &'static str {
-        "Old build archives stored in ~/Library/Developer/Xcode/Archives"
+        "Build archives in ~/Library/Developer/Xcode/Archives. Not a cache: each one holds the \
+         dSYMs needed to symbolicate crash reports of that release and cannot be rebuilt. \
+         Explicit only (`--category xcode-archives`)"
+    }
+
+    /// An archive is the only copy of a shipped build's debug symbols, so it is
+    /// neither part of `--category all` nor of the `xcode` group.
+    fn included_in_default_run(&self) -> bool {
+        false
     }
 
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
@@ -129,5 +137,17 @@ impl Cleaner for XcodeDeviceSupportCleaner {
 
         items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Archives are the only copy of a release's dSYMs: never swept by `all`.
+    #[test]
+    fn test_archives_are_explicit_only() {
+        assert!(!XcodeArchivesCleaner.included_in_default_run());
+        assert!(XcodeDerivedDataCleaner.included_in_default_run());
     }
 }

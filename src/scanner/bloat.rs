@@ -275,13 +275,13 @@ pub fn scan_xcode_and_simulators() -> Vec<BloatSource> {
         (
             "Xcode Archives (Built IPA/App archives)",
             "~/Library/Developer/Xcode/Archives",
-            "Review ~/Library/Developer/Xcode/Archives and delete old builds",
+            "Review ~/Library/Developer/Xcode/Archives (they hold your releases' dSYMs), then cli-ner clean --category xcode-archives --interactive --execute",
             true,
         ),
         (
             "iOS Simulator Devices (Runtime disk images)",
             "~/Library/Developer/CoreSimulator/Devices",
-            "xcrun simctl erase all (or delete unused devices via Xcode)",
+            "cli-ner clean --category unavailable-simulators (only devices whose runtime is gone; delete others one by one in Xcode › Devices and Simulators)",
             true,
         ),
         (

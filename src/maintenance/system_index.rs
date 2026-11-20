@@ -8,10 +8,14 @@ use std::path::{Path, PathBuf};
 
 const LSREGISTER_PATH: &str = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
 
-/// Rebuilds the LaunchServices database: deduplicates the "Open With" menu and
-/// clears stale file-type/application associations. macOS regenerates the
-/// database from scratch on its own, so this is self-healing and carries no
-/// real risk — no files are deleted, no admin privileges are needed.
+/// Cleans up the LaunchServices database: drops stale application records (the
+/// duplicates in the "Open With" menu) and re-registers the apps in the local,
+/// system and user domains.
+///
+/// Deliberately `-gc`, never `-delete`: `lsregister -h` says that after
+/// `-delete` "You must then reboot!" — until then icons, "Open With" and file
+/// associations are broken. `-gc` compacts the live database in place, so
+/// nothing needs a restart. No files are deleted, no admin rights are needed.
 pub struct LaunchServicesRebuildAction;
 
 impl MaintenanceAction for LaunchServicesRebuildAction {
@@ -24,9 +28,9 @@ impl MaintenanceAction for LaunchServicesRebuildAction {
     }
 
     fn description(&self) -> &'static str {
-        "Deduplicates the \"Open With\" menu and clears stale file-association entries \
-         by rebuilding the LaunchServices database. The OS regenerates it automatically, \
-         so this is safe to run at any time."
+        "Removes stale entries (duplicates in the \"Open With\" menu) from the \
+         LaunchServices database and re-registers installed apps. The database is \
+         compacted in place, never deleted, so no restart is needed."
     }
 
     fn risk(&self) -> RiskLevel {
@@ -44,13 +48,11 @@ impl MaintenanceAction for LaunchServicesRebuildAction {
     fn commands(&self) -> Vec<SystemCommand> {
         vec![SystemCommand::new(
             LSREGISTER_PATH,
-            [
-                "-delete", "-seed", "-r", "-domain", "local", "-domain", "system", "-domain",
-                "user",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+            // `-gc`, not `-delete` (which needs a reboot) — see the type's doc comment.
+            ["-gc", "-f", "-all", "local,system,user"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         )]
     }
 }
@@ -149,10 +151,15 @@ mod tests {
         let commands = action.commands();
         assert_eq!(commands.len(), 1);
 
-        let rendered = commands[0].display();
-        assert!(rendered.contains("-domain local"));
-        assert!(rendered.contains("-domain system"));
-        assert!(rendered.ends_with("-domain user"));
+        assert_eq!(commands[0].args, ["-gc", "-f", "-all", "local,system,user"]);
+    }
+
+    /// `-delete` throws the database away and needs a reboot before icons and
+    /// "Open With" work again; the action must never use it.
+    #[test]
+    fn test_launch_services_never_deletes_the_database() {
+        let commands = LaunchServicesRebuildAction.commands();
+        assert!(!commands[0].args.iter().any(|a| a == "-delete"));
     }
 
     #[test]

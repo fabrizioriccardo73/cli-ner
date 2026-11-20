@@ -103,7 +103,7 @@ cargo install --path .
 - ⚡ **High Performance**:
   - Written in **Rust**, with parallel directory measurement and a single scan per run (the preview you approve is the exact set that gets cleaned).
 - 🛠️ **Developer Tools & Caches Support**:
-  - **Homebrew**: `brew cleanup -s`, `brew autoremove`
+  - **Homebrew**: `brew cleanup -s` (never `brew autoremove`, which uninstalls packages)
   - **Node.js**: `npm` cache (`~/.npm/_cacache`), **pnpm** store (`pnpm store prune`)
   - **Python**: `pip` cache (`~/Library/Caches/pip`)
   - **Rust**: `~/.cargo/registry/cache`, extracted sources in `registry/src`, and git dependency checkouts
@@ -226,30 +226,30 @@ execution, so nothing can drift in between.
 
 | Category | Aliases | Targets |
 |---|---|---|
-| `all` | | Everything below except `trash`, `unavailable-simulators`, `biome` and `browser-offline-data` (**default**) |
+| `all` | | Everything below except `trash`, `unavailable-simulators`, `biome`, `xcode-archives` and `browser-offline-data` (**default**) |
 | `app-caches` | `deep` | extended-app-cache + browser-cache + app-support-cache + container-cache + metal-cache |
 | `dev` | `dev-tools`, `developer` | brew + npm + pnpm + pip + gradle + maven + cargo + go |
-| `xcode` | | DerivedData + Archives + DeviceSupport + simulator caches |
+| `xcode` | | DerivedData + DeviceSupport + simulator caches (Archives only by name) |
 | `user-cache` | `cache` | `~/Library/Caches/*` — folders of running apps and browsers are skipped |
 | `user-logs` | `logs` | `~/Library/Logs/*` |
 | `temp-files` | `temp` | `/private/tmp`, `/private/var/tmp` (only entries with no change inside for 24h+, no sockets, no lock/pid files) |
 | `trash` | | Empties `~/.Trash` — **always permanent**, never part of `all` |
 | `docker` | | Build cache + dangling images + stopped containers — **permanent**; with `--yes` only when named |
-| `brew` | `homebrew` | `brew cleanup -s` + `brew autoremove` |
+| `brew` | `homebrew` | `brew cleanup -s` (no `brew autoremove`: it would uninstall packages) |
 | `npm` | | `npm cache clean --force` |
 | `pnpm` | | `pnpm store prune` |
 | `pip` | | `pip3 cache purge` |
 | `gradle` | | `~/.gradle/caches` + stale wrapper distributions |
-| `maven` | | `~/.m2/repository` |
+| `maven` | | Downloaded artifacts in `~/.m2/repository`; locally installed ones (`mvn install`, `install:install-file`) are kept |
 | `cargo` | | Registry cache + extracted sources + git checkouts |
 | `go` | `golang` | `go clean -modcache` |
 | `xcode-derived-data` | | DerivedData only |
-| `xcode-archives` | `archives` | Build archives only |
+| `xcode-archives` | `archives` | Build archives — **not a cache**: they hold the dSYMs of your releases. Never part of `all` or `xcode` |
 | `xcode-device-support` | `device-support` | iOS symbol files only |
 | `xcode-simulator` | `simulator` | CoreSimulator caches only (devices are never touched) |
 | `unavailable-simulators` | `simulator-devices` | Simulator devices whose runtime is not installed, one item each — **permanent** (apps and data gone; reinstalling the runtime would have brought them back), never part of `all` |
 | `extended-app-cache` | `extended-cache` | Downloaded wallpaper/screensaver assets, fontconfig cache |
-| `app-support-cache` | `electron` | Electron/Chromium apps' `~/Library/Application Support/<app>/{Cache, Code Cache, GPUCache, Dawn*Cache, …}` (running apps skipped) |
+| `app-support-cache` | `electron` | Electron/Chromium apps' `~/Library/Application Support/<app>/{Cache, Code Cache, GPUCache, Dawn*Cache, …}` — only folders with Chromium's own cache layout, so another app's folder that is merely named `Cache` is left alone (running apps skipped) |
 | `container-cache` | `containers` | `~/Library/Containers/<app>/Data/Library/Caches` (running apps, Mail and Messages skipped) |
 | `metal-cache` | `metal` | Compiled Metal shaders under `/var/folders` (shared and per-app) |
 | `browser-cache` | `browser`, `browsers` | Code, GPU and shader caches inside every profile of Chrome, Edge, Brave, Arc, Vivaldi, Opera, Dia, Comet and other Chromium browsers (`~/Library/Application Support/<browser>/<profile>/{Code Cache, GPUCache, Dawn*Cache, …}`, plus `GrShaderCache`, `ShaderCache`, `component_crx_cache`, `extensions_crx_cache`), and Tor Browser's cache. Passwords, cookies, history, bookmarks, tabs and extensions are never matched; running browsers are skipped |
@@ -263,15 +263,36 @@ the Trash first. Two caveats still apply:
   their own tool, so nothing reaches the Trash. They are marked `PERMANENT` in the preview and
   listed apart in the confirmation prompt. `docker` removes stopped containers, and any data in
   them that is not in a volume.
-- **"Regenerable" assumes the source still exists.** `~/.m2/repository` can hold artifacts you
-  installed by hand (`mvn install`), and a module or git dependency removed upstream cannot be
-  fetched again.
+- **"Regenerable" assumes the source still exists.** A module or git dependency removed upstream
+  cannot be fetched again. In `~/.m2/repository`, artifacts installed on this machine are
+  recognised (`maven-metadata-local.xml`, `_remote.repositories` entries with an empty repository
+  id, or a `.pom` with no download record) and never offered.
 
-Four categories hold data that is not a cache, so they never run as part of `all` and must
+Five categories hold data that is not a cache, so they never run as part of `all` and must
 be asked for by name: `trash` (whatever is in the Trash), `unavailable-simulators` (simulator
 devices with their apps and data), `biome` (the on-device app-usage history macOS uses for
-suggestions and, likely, Screen Time) and `browser-offline-data` (what websites stored to work
-offline).
+suggestions and, likely, Screen Time), `xcode-archives` (the only copy of your releases'
+debug symbols) and `browser-offline-data` (what websites stored to work offline).
+
+#### ⚠️ Critical operations at a glance
+
+| Command | What can be lost | Recoverable? |
+|---|---|---|
+| `clean --execute` | Caches and temp files, moved to `~/.Trash` | ✅ until the Trash is emptied |
+| `clean --execute` with `brew`, `npm`, `pip`, `pnpm`, `go` in the run | Package caches, old Homebrew versions, the whole Go module cache | ❌ re-downloaded on demand, not restorable |
+| `clean --execute --yes` | Same as above, **with no prompt at all** — Docker is skipped unless named | ❌ for the permanent part |
+| `clean --execute --force` | **Everything** selected is deleted instead of trashed | ❌ |
+| `clean --category docker --execute` | Stopped containers and any data not in a volume, dangling images, build cache | ❌ |
+| `clean --category trash --execute` | Everything in the Trash, including what you put there yourself | ❌ |
+| `clean --category unavailable-simulators --execute` | Simulator devices with their apps and data | ❌ |
+| `clean --category biome --execute` | App-usage history (Siri suggestions, likely Screen Time) | ✅ via Trash, unless `--force` |
+| `clean --category xcode-archives --execute` | Archives and the dSYMs to symbolicate crashes | ✅ via Trash, unless `--force` |
+| `clean --category browser-offline-data --execute` | Offline copies of web apps (downloaded again when online) | ✅ via Trash, unless `--force` |
+| `maintain --allow-admin --execute` | Expired Time Machine snapshots, crash core dumps | ❌ — each asks on its own, even with `--yes` |
+| `maintain --include-heavy …` | Nothing, but hours of Spotlight re-indexing | ✅ |
+
+Rules of thumb: run without `--execute` first, prefer `--interactive` for anything you are not
+sure about, and keep `--yes` / `--force` for scripts whose categories you have reviewed.
 
 Root-owned system caches (coresymbolicationd, IntlDataCache, print spooler, core dumps, downloaded
 Aerial screen saver videos) are not in
@@ -515,7 +536,7 @@ cli-ner maintain --category system-index --include-heavy --allow-admin --execute
 
 | Category | Action | Admin | Risk |
 |---|---|---|---|
-| `system-index` | Rebuild LaunchServices database ("Open With" duplicates) | | low |
+| `system-index` | Clean up the LaunchServices database ("Open With" duplicates; compacted in place, no reboot) | | low |
 | `system-index` | Vacuum Mail envelope index (Mail.app must be closed) | | low |
 | `system-index` | Rebuild Spotlight index (`mdutil -E /`) — **opt-in** | ✓ | medium |
 | `system-index` | Rebuild `locate` database — **opt-in** | ✓ | medium |
@@ -534,8 +555,10 @@ cli-ner maintain --category system-index --include-heavy --allow-admin --execute
 - **`--include-heavy`**: Spotlight and `locate` rebuilds are never part of a normal run. Even with
   the flag, each one asks for its own yes/no, which `--yes` does not skip, so they never run
   unattended.
-- Medium-risk actions need confirmation unless you pass `--yes`. Every run goes to the same audit
-  log as `clean` (`cli-ner report`).
+- **Irreversible actions** (thinning local snapshots, deleting core dumps) ask for their own
+  yes/no, like heavy rebuilds: `--yes` skips only the shared prompt, never these.
+- Other medium-risk actions need confirmation unless you pass `--yes`. Every run goes to the same
+  audit log as `clean` (`cli-ner report`).
 
 ---
 
@@ -547,7 +570,7 @@ cli-ner maintain --category system-index --include-heavy --allow-admin --execute
 |---|---|---|---|
 | **Preview** | Measures and shows, touches nothing | *default* | — |
 | **Trash** | Moves to `~/.Trash` | `--execute` | ✅ until you empty it |
-| **Permanent** | Actually deletes | `--execute --force`, the `trash` / `unavailable-simulators` categories, and external-tool targets (`brew`, `npm`, `pip`, `pnpm`, `go`, `docker`) | ❌ **no** |
+| **Permanent** | Actually deletes | `--execute --force`, the `trash` / `unavailable-simulators` categories, external-tool targets (`brew`, `npm`, `pip`, `pnpm`, `go`, `docker`), and irreversible `maintain` actions | ❌ **no** |
 
 ### Validation pipeline
 

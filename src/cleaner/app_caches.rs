@@ -32,6 +32,23 @@ pub const CHROMIUM_CACHE_DIRS: &[&str] = &[
 
 const METAL_CACHE_DIRS: &[&str] = &["com.apple.metal", "com.apple.metalfe"];
 
+/// Whether `dir` (an app's `<leaf>` folder) has the on-disk layout Chromium
+/// writes, rather than just the same name.
+///
+/// Any app may keep a folder called `Cache` in Application Support for its own
+/// data, so the name alone is not proof. Chromium's caches always carry one of:
+/// - `Cache`: a `Cache_Data` folder (or, in older builds, `index` + `data_0`);
+/// - `Code Cache`: a `js` or `wasm` folder;
+/// - GPU/shader/Dawn caches: the blockfile pair `index` + `data_0`.
+fn looks_like_chromium_cache(leaf: &str, dir: &Path) -> bool {
+    let blockfile = || dir.join("index").is_file() && dir.join("data_0").is_file();
+    match leaf {
+        "Cache" => dir.join("Cache_Data").is_dir() || blockfile(),
+        "Code Cache" => dir.join("js").is_dir() || dir.join("wasm").is_dir(),
+        _ => blockfile(),
+    }
+}
+
 /// Direct subdirectories of `dir` that are real directories, not symlinks: a
 /// symlinked app folder could point anywhere, so it is never descended into.
 fn real_subdirs(dir: &Path) -> Vec<(String, PathBuf)> {
@@ -67,7 +84,8 @@ impl Cleaner for AppSupportCacheCleaner {
 
     fn description(&self) -> &'static str {
         "HTTP, V8 code and GPU/shader caches that Electron and Chromium-based apps keep \
-         directly under ~/Library/Application Support/<app>/ (apps that are running are skipped)"
+         directly under ~/Library/Application Support/<app>/. Only folders with Chromium's own \
+         cache layout are touched; apps that are running are skipped"
     }
 
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
@@ -80,7 +98,10 @@ impl Cleaner for AppSupportCacheCleaner {
             }
             for leaf in CHROMIUM_CACHE_DIRS {
                 let cache_dir = app_dir.join(leaf);
-                if cache_dir.is_dir() && !cache_dir.is_symlink() {
+                if cache_dir.is_dir()
+                    && !cache_dir.is_symlink()
+                    && looks_like_chromium_cache(leaf, &cache_dir)
+                {
                     items.extend(children_as_targets(&cache_dir, |child| {
                         format!("{} {}: {}", app, leaf, child)
                     }));
@@ -244,6 +265,39 @@ mod tests {
                 find_allowed_target(&probe).unwrap_or_else(|| panic!("{leaf} is not allowlisted"));
             assert_eq!(target.category, CleanCategory::AppSupportCache);
         }
+    }
+
+    /// A folder that is only *named* like a Chromium cache is somebody's data.
+    #[test]
+    fn test_only_real_chromium_cache_layouts_are_recognised() {
+        let root = std::env::temp_dir().join("cli-ner-chromium-layout");
+        let _ = fs::remove_dir_all(&root);
+
+        let http = root.join("Electron/Cache");
+        fs::create_dir_all(http.join("Cache_Data")).unwrap();
+        assert!(looks_like_chromium_cache("Cache", &http));
+
+        let code = root.join("Electron/Code Cache");
+        fs::create_dir_all(code.join("js")).unwrap();
+        assert!(looks_like_chromium_cache("Code Cache", &code));
+
+        let gpu = root.join("Electron/GPUCache");
+        fs::create_dir_all(&gpu).unwrap();
+        fs::write(gpu.join("index"), b"x").unwrap();
+        fs::write(gpu.join("data_0"), b"x").unwrap();
+        assert!(looks_like_chromium_cache("GPUCache", &gpu));
+
+        // Same names, other apps' own files: never treated as a cache.
+        let foreign = root.join("SomeApp/Cache");
+        fs::create_dir_all(foreign.join("projects")).unwrap();
+        fs::write(foreign.join("library.db"), b"x").unwrap();
+        assert!(!looks_like_chromium_cache("Cache", &foreign));
+        let foreign_gpu = root.join("SomeApp/GPUCache");
+        fs::create_dir_all(&foreign_gpu).unwrap();
+        fs::write(foreign_gpu.join("index"), b"x").unwrap();
+        assert!(!looks_like_chromium_cache("GPUCache", &foreign_gpu));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

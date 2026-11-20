@@ -3,8 +3,10 @@ use crate::report::operation_log::{ActionStatus, ActionType};
 use crate::safety::allowlist::CleanCategory;
 use crate::utils::fs::{calculate_size, expand_tilde};
 use anyhow::Result;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use walkdir::WalkDir;
 
 /// Re-measure a cache directory after an external package manager ran and report the
 /// difference that actually landed on disk.
@@ -72,7 +74,7 @@ impl Cleaner for HomebrewCleaner {
     }
 
     fn name(&self) -> &'static str {
-        "Homebrew Cache & Unused Packages"
+        "Homebrew Cache"
     }
 
     fn category(&self) -> CleanCategory {
@@ -80,7 +82,8 @@ impl Cleaner for HomebrewCleaner {
     }
 
     fn description(&self) -> &'static str {
-        "Runs brew cleanup and brew autoremove to free cached packages and unused dependencies"
+        "Runs `brew cleanup -s`: removes downloaded bottles/sources and old versions of \
+         installed formulae. Never uninstalls anything (no `brew autoremove`)"
     }
 
     fn is_available(&self) -> bool {
@@ -124,7 +127,7 @@ impl Cleaner for HomebrewCleaner {
             result.total_bytes_freed = total_size;
             result.items_cleaned = targets.len();
             result.details.push(ExecutionItemResult::new(
-                "brew cleanup -s && brew autoremove".into(),
+                "brew cleanup -s".into(),
                 total_size,
                 ActionType::DryRun,
                 ActionStatus::Success,
@@ -133,37 +136,37 @@ impl Cleaner for HomebrewCleaner {
         }
 
         let cache_dir = expand_tilde("~/Library/Caches/Homebrew");
-        let cleanup_status = Command::new("brew").args(["cleanup", "-s"]).status();
-        let autoremove_status = Command::new("brew").arg("autoremove").status();
-
-        match (cleanup_status, autoremove_status) {
-            (Ok(c), Ok(a)) if c.success() && a.success() => {
+        // `brew autoremove` is deliberately not run: it *uninstalls* formulae that
+        // were installed as a dependency, including ones the user calls directly
+        // (python, node, openssl, …). That is removing software, not a cache.
+        match Command::new("brew").args(["cleanup", "-s"]).status() {
+            Ok(s) if s.success() => {
                 let freed = measure_reclaimed(&cache_dir, total_size);
                 result.total_bytes_freed = freed;
                 result.items_cleaned = 1;
                 result.details.push(ExecutionItemResult::new(
-                    "brew cleanup & autoremove".into(),
+                    "brew cleanup -s".into(),
                     freed,
                     ActionType::ExternalCommand,
                     ActionStatus::Success,
                 ));
             }
-            (Err(e), _) | (_, Err(e)) => {
+            Ok(_) => {
                 result.items_failed = 1;
                 result.details.push(ExecutionItemResult::new(
-                    "brew cleanup".into(),
-                    0,
-                    ActionType::ExternalCommand,
-                    ActionStatus::Failed(e.to_string()),
-                ));
-            }
-            _ => {
-                result.items_failed = 1;
-                result.details.push(ExecutionItemResult::new(
-                    "brew cleanup".into(),
+                    "brew cleanup -s".into(),
                     0,
                     ActionType::ExternalCommand,
                     ActionStatus::Failed("brew cleanup returned non-zero exit code".into()),
+                ));
+            }
+            Err(e) => {
+                result.items_failed = 1;
+                result.details.push(ExecutionItemResult::new(
+                    "brew cleanup -s".into(),
+                    0,
+                    ActionType::ExternalCommand,
+                    ActionStatus::Failed(e.to_string()),
                 ));
             }
         }
@@ -656,30 +659,116 @@ impl Cleaner for MavenCacheCleaner {
     }
 
     fn description(&self) -> &'static str {
-        "Cleans cached Maven repository artifacts in ~/.m2/repository"
+        "Cleans downloaded Maven artifacts in ~/.m2/repository. Artifacts installed locally \
+         (`mvn install`, `install:install-file`) are kept: they exist nowhere else"
     }
 
     fn scan(&self) -> Result<Vec<CleanTargetItem>> {
         let m2_repo = expand_tilde("~/.m2/repository");
-        let mut items = Vec::new();
-        if m2_repo.is_dir() {
-            for entry in std::fs::read_dir(&m2_repo)?.flatten() {
-                let path = entry.path();
-                if let Ok((size, count)) = calculate_size(&path) {
-                    if size > 0 {
-                        let name = entry.file_name().to_string_lossy().to_string();
-                        items.push(CleanTargetItem {
-                            path,
-                            size_bytes: size,
-                            file_count: count,
-                            description: format!("Maven repository group {}", name),
-                        });
-                    }
-                }
-            }
+        if !m2_repo.is_dir() {
+            return Ok(Vec::new());
         }
+        let protected = maven_locally_installed_dirs(&m2_repo);
+        let mut items = Vec::new();
+        collect_maven_targets(&m2_repo, &m2_repo, &protected, &mut items);
         items.sort_by_key(|b| std::cmp::Reverse(b.size_bytes));
         Ok(items)
+    }
+}
+
+/// Folders of `~/.m2/repository` holding artifacts that were *installed* on this
+/// machine rather than downloaded, so deleting them could not be undone by a
+/// re-download (an internal library, a jar added with `install:install-file`).
+///
+/// Recognised by Maven's own bookkeeping:
+/// - `maven-metadata-local.xml`, written by `mvn install`;
+/// - `_remote.repositories` with an entry for an empty repository id (`foo.jar>=`),
+///   which is how Maven Resolver records "installed locally";
+/// - a version folder with a `.pom` but no `_remote.repositories` at all: its
+///   origin is unknown (legacy local repository), so it is kept too.
+fn maven_locally_installed_dirs(repo: &Path) -> HashSet<PathBuf> {
+    let mut protected = HashSet::new();
+    // dir -> (has a .pom, has _remote.repositories)
+    let mut versions: HashMap<PathBuf, (bool, bool)> = HashMap::new();
+
+    for entry in WalkDir::new(repo)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let Some(parent) = entry.path().parent() else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy();
+
+        if name == "maven-metadata-local.xml" {
+            protected.insert(parent.to_path_buf());
+        } else if name == "_remote.repositories" {
+            versions.entry(parent.to_path_buf()).or_default().1 = true;
+            let installed_here = std::fs::read_to_string(entry.path())
+                .map(|text| {
+                    text.lines()
+                        .map(str::trim)
+                        .any(|l| !l.starts_with('#') && l.ends_with(">="))
+                })
+                // Unreadable bookkeeping: assume the worst and keep it.
+                .unwrap_or(true);
+            if installed_here {
+                protected.insert(parent.to_path_buf());
+            }
+        } else if name.ends_with(".pom") {
+            versions.entry(parent.to_path_buf()).or_default().0 = true;
+        }
+    }
+
+    for (dir, (has_pom, has_remote)) in versions {
+        if has_pom && !has_remote {
+            protected.insert(dir);
+        }
+    }
+    protected
+}
+
+/// Offer every entry of `dir` that contains nothing protected; descend into the
+/// ones that do, so a single locally installed artifact keeps only itself (and
+/// the folders above it) instead of blocking its whole group.
+fn collect_maven_targets(
+    repo: &Path,
+    dir: &Path,
+    protected: &HashSet<PathBuf>,
+    items: &mut Vec<CleanTargetItem>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if protected.contains(&path) {
+            continue;
+        }
+        if protected.iter().any(|p| p.starts_with(&path)) {
+            let is_real_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_real_dir {
+                collect_maven_targets(repo, &path, protected, items);
+            }
+            continue;
+        }
+        if let Ok((size, count)) = calculate_size(&path) {
+            if size > 0 {
+                let name = path
+                    .strip_prefix(repo)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                items.push(CleanTargetItem {
+                    path,
+                    size_bytes: size,
+                    file_count: count,
+                    description: format!("Maven repository {}", name),
+                });
+            }
+        }
     }
 }
 
@@ -738,6 +827,71 @@ impl Cleaner for CargoCacheCleaner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// Downloaded artifacts are offered; locally installed ones (and only those)
+    /// are kept, without blocking the rest of their group.
+    #[test]
+    fn test_maven_keeps_locally_installed_artifacts() {
+        let repo = std::env::temp_dir().join("cli-ner-m2-test");
+        let _ = std::fs::remove_dir_all(&repo);
+
+        let downloaded = repo.join("org/apache/commons-lang3/3.14.0");
+        write(&downloaded.join("commons-lang3-3.14.0.jar"), "jar");
+        write(&downloaded.join("commons-lang3-3.14.0.pom"), "pom");
+        write(
+            &downloaded.join("_remote.repositories"),
+            "#NOTE: internal file\ncommons-lang3-3.14.0.jar>central=\ncommons-lang3-3.14.0.pom>central=\n",
+        );
+
+        let installed = repo.join("com/acme/internal-lib/1.0");
+        write(&installed.join("internal-lib-1.0.jar"), "jar");
+        write(&installed.join("internal-lib-1.0.pom"), "pom");
+        write(
+            &installed.join("_remote.repositories"),
+            "internal-lib-1.0.jar>=\n",
+        );
+
+        let installed_file = repo.join("com/vendor/driver");
+        write(
+            &installed_file.join("maven-metadata-local.xml"),
+            "<metadata/>",
+        );
+        write(&installed_file.join("9.0/driver-9.0.jar"), "jar");
+
+        let legacy = repo.join("com/acme/old-lib/0.1");
+        write(&legacy.join("old-lib-0.1.pom"), "pom");
+
+        let sibling = repo.join("com/acme/downloaded-too/2.0");
+        write(&sibling.join("downloaded-too-2.0.pom"), "pom");
+        write(
+            &sibling.join("_remote.repositories"),
+            "downloaded-too-2.0.pom>central=\n",
+        );
+
+        let protected = maven_locally_installed_dirs(&repo);
+        let mut items = Vec::new();
+        collect_maven_targets(&repo, &repo, &protected, &mut items);
+        let paths: Vec<&Path> = items.iter().map(|i| i.path.as_path()).collect();
+
+        assert!(paths.contains(&repo.join("org").as_path()));
+        assert!(paths.contains(&repo.join("com/acme/downloaded-too").as_path()));
+        for kept in [&installed, &installed_file, &legacy] {
+            assert!(
+                !paths
+                    .iter()
+                    .any(|p| kept.starts_with(p) || p.starts_with(kept)),
+                "{} must not be offered",
+                kept.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 
     /// Docker prints what it really removed; that is the number worth reporting,
     /// not the `docker system df` upper bound gathered before the prune.
